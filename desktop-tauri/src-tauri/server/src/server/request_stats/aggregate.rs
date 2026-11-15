@@ -23,8 +23,8 @@ use super::clock::{date_key, day_of, local_midnight_ms};
 use super::record::{DailyEntry, RequestEntry};
 use super::report::{
     build_accounts, build_models, build_providers, build_top_model, cache_rates, cache_trend_24h,
-    daily_trend, heatmap, model_stat_key, normalize_range, push_account_accum, push_model_accum,
-    push_provider_accum, range_bounds, range_totals, streak, SummaryRow,
+    credit_summary, daily_trend, heatmap, model_stat_key, normalize_range, push_account_accum,
+    push_model_accum, push_provider_accum, range_bounds, range_totals, streak, SummaryRow,
 };
 use super::{daily, sql};
 use super::legacy;
@@ -91,6 +91,70 @@ pub(super) fn remap_model_days(conn: &mut rusqlite::Connection) -> rusqlite::Res
         "INSERT INTO kv (key, value) VALUES (?1, 'true')
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         rusqlite::params![MODEL_UPSTREAM_MARKER],
+    )?;
+    tx.commit()?;
+    Ok(changed)
+}
+
+/// 积分聚合的完成标记键（`kv` 表，schema v25）。
+///
+/// 与 `MODEL_UPSTREAM_MARKER` 同一机制与写法。为什么**必须**是显式标记：
+/// 旧聚合行缺的这两列与「确实没有积分读数」在库里长得一样（`credit = NULL`
+/// / `credit_rows = 0`），没有可从数据本身检测的特征 —— 与模型维度那次
+/// 的处境相同（见 `remap_model_days` 头部的说明）。
+const CREDIT_BACKFILL_MARKER: &str = "creditStatsBackfilled";
+
+/// [`RequestStats::backfill_credit_once`] 的库操作体。
+///
+/// 与 `remap_model_days` 的关键差别：**只重算「明细里确实有积分读数」的那几天**。
+/// 候选日先做一次 `SELECT DISTINCT ts ... WHERE credit IS NOT NULL` 再按本地
+/// 自然日归组（比「把全部日期都重算一遍」省得多，且对没有积分的家完全无操作）。
+///
+/// 安全闸沿用同一条判据（明细条数 ≥ 聚合行请求数）：明细被手动清理过的那天
+/// 拿残缺明细重算会让当天数字凭空缩水，宁可留着 `credit = NULL`（报表显示
+/// 「未记录」），也不写一个偏小的数。
+pub(super) fn backfill_credit_days(conn: &mut rusqlite::Connection) -> rusqlite::Result<Vec<String>> {
+    if legacy::marker_present(conn, CREDIT_BACKFILL_MARKER)? {
+        return Ok(Vec::new());
+    }
+    let tx = conn.unchecked_transaction()?;
+    // 有积分读数的明细落在哪些本地日。`credit IS NOT NULL` 走不了 ts 索引的
+    // 选择性，但这条只在升级后跑一次；几万行的扫描在百毫秒量级。
+    let mut days: BTreeSet<NaiveDate> = BTreeSet::new();
+    {
+        let mut stmt = tx.prepare("SELECT DISTINCT ts FROM requests WHERE credit IS NOT NULL")?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let ts: i64 = row.get(0)?;
+            days.insert(day_of(ts));
+        }
+    }
+    let mut changed = Vec::new();
+    for day in days {
+        let key = date_key(day);
+        let start = local_midnight_ms(day);
+        let end = local_midnight_ms(day + ChronoDuration::days(1)).saturating_sub(1);
+        let detail_count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM requests WHERE ts >= ?1 AND ts <= ?2",
+            rusqlite::params![start, end],
+            |row| row.get(0),
+        )?;
+        let aggregate_requests: i64 = tx
+            .query_row(
+                "SELECT requests FROM request_daily WHERE date = ?1",
+                rusqlite::params![key],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        if detail_count >= aggregate_requests {
+            rebuild_day(&tx, day)?;
+            changed.push(key);
+        }
+    }
+    tx.execute(
+        "INSERT INTO kv (key, value) VALUES (?1, 'true')
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        rusqlite::params![CREDIT_BACKFILL_MARKER],
     )?;
     tx.commit()?;
     Ok(changed)
@@ -164,6 +228,9 @@ pub(super) fn summarize(
     // models 同样与 topModel 同源（`topModel` 就是这张表的冠军）：
     // 报表的「模型用量」环形图读它，各扇区之和等于 overview.tokens
     let models = build_models(&totals.model_totals);
+    // 积分维度（**新增键**，与 providers / accounts / models 同源同区间）：
+    // 合计、单价、三张排行与近 7 天的预测原料。旧前端拿到它会直接忽略。
+    let credits = credit_summary(&totals, daily, &start_date, &end_date, now_day);
     let trend = daily_trend(daily, &start_date, &end_date);
     let map = heatmap(daily, now_day);
     let consecutive = streak(daily, now_day);
@@ -197,6 +264,9 @@ pub(super) fn summarize(
         // 模型比 provider 更细：一家可以承载多个模型，所以这张表回答的是
         // 「用量花在哪个模型上」——报表的「模型用量」环形图直接读它
         "models": models,
+        // 积分维度（**新增字段，不改既有字段**，消费方式同 providers）：
+        // total / ppm / coverage / mixed / byProvider|byAccount|byModel / forecast
+        "credits": credits,
         "heatmap": map,
         "cacheRates": rates,
         "cacheTrend24h": cache_trend,
@@ -229,6 +299,18 @@ pub(super) fn fold_into_daily(day: &mut DailyEntry, item: &RequestEntry) {
     day.tokens += item.total_tokens;
     day.cache_hit_tokens += item.cache_read_tokens;
     day.cache_input_tokens += item.prompt_tokens;
+    // 积分（schema v25）：只有**上报了**的条目才累加，`None` 一律跳过 ——
+    // 「没读数」不能让当天凭空出现一个 0，理由与 `requests.credit` 同一口径
+    // （见 `V25_SCHEMA`）。`credit_rows` 跟着一起加，报表据此区分
+    // 「0 积分」与「这家不报积分」。
+    //
+    // 这里不再做有限性 / 负数过滤：明细侧的 `NewRequestEntry::normalize`
+    // 已经挡过一轮（非有限值与负数按「没上报」处理），而 `rebuild_day` /
+    // 迁移回填读的是**已归一的库行**。再判一次只会让两条路径多一处可漂移的口径。
+    if let Some(value) = item.credit {
+        day.credit = Some(day.credit.unwrap_or(0.0) + value);
+        day.credit_rows += 1;
+    }
     // 模型维度用「上游真名」当统计键（见 `model_stat_key`）：映射只是代名，
     // 实际请求的仍是上游那一个模型，报表要按它归组
     push_model_accum(
@@ -236,6 +318,7 @@ pub(super) fn fold_into_daily(day: &mut DailyEntry, item: &RequestEntry) {
         model_stat_key(&item.model, &item.upstream_model),
         item.total_tokens,
         1,
+        item.credit,
     );
     // 空 provider 也建组（见 push_provider_accum 的注释）
     push_provider_accum(
@@ -244,6 +327,8 @@ pub(super) fn fold_into_daily(day: &mut DailyEntry, item: &RequestEntry) {
         1,
         i64::from(success),
         item.total_tokens,
+        item.credit,
+        i64::from(item.credit.is_some()),
     );
     push_account_accum(
         &mut day.account_stats,
@@ -252,5 +337,7 @@ pub(super) fn fold_into_daily(day: &mut DailyEntry, item: &RequestEntry) {
         1,
         i64::from(success),
         item.total_tokens,
+        item.credit,
+        i64::from(item.credit.is_some()),
     );
 }

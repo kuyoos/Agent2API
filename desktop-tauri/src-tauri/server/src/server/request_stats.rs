@@ -111,7 +111,7 @@ use retention::RetentionBounds;
 pub use retention::Retention;
 // 拆到子模块的三样，这里引回：record / usage_summary 的折算入口、
 // remap 的库操作体、报表装配（均为 `pub(super)`，见 aggregate.rs 的模块头）
-use aggregate::{fold_into_daily, remap_model_days, summarize};
+use aggregate::{backfill_credit_days, fold_into_daily, remap_model_days, summarize};
 use report::{entry_json, provider_label, CACHE_WINDOWS};
 
 // CompactStart 在此 re-export：api::stats_api 的 compact 路由按它分派响应。
@@ -907,6 +907,38 @@ impl RequestStats {
             // Err（已由 with_conn_mut 打控制台日志）与库不可用都在这一支：
             // 标记没写，下次启动自然再试，订正不会因此丢
             None => {}
+        }
+    }
+
+    /// 积分聚合的一次性回填：`request_daily` 的 `credit` / `credit_rows`
+    /// 是 schema v25 才有的列，此前的聚合行没有它们（`NULL` + 0）。这里按
+    /// **明细里确实有积分读数**的那些天重算，把历史接回来。
+    ///
+    /// ── 为什么需要（而不是等自然积累）──────────────────────────
+    /// 报表的区间统计只读聚合行（理由见 `report` 模块头）。不回填的话，
+    /// 升级后打开报表，7 天 / 30 天 / 全部这几档的积分一律是「未记录」——
+    /// 而明细里其实有（v23 起一直在记）—— 用户会以为功能坏了。
+    ///
+    /// ── 调用时机与安全边界 ────────────────────────────────────
+    /// 与 `remap_model_dimension_once` 完全同构：启动时一次；`upgrade_pending`
+    /// 时跳过（跑了会把标记打早，导入完成的旧聚合行永远轮不到）；升级完成后
+    /// 由 `api::upgrade_api` 补调。重复调用由 kv 标记 + 条数判据挡住。
+    pub fn backfill_credit_once(&self) {
+        let outcome = {
+            let guard = self.guard();
+            self.with_conn_mut(&guard, backfill_credit_days)
+        };
+        match outcome {
+            Some(changed) if !changed.is_empty() => logging::log(
+                "[Stats]",
+                &format!(
+                    "🪙 已为 {} 天的历史积分消耗重算聚合：{}",
+                    changed.len(),
+                    changed.join("、")
+                ),
+            ),
+            // 标记没写时下次启动自然再试（与上面那条同一处理）
+            Some(_) | None => {}
         }
     }
 }

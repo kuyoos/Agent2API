@@ -161,6 +161,15 @@ pub(super) struct RangeTotals {
     pub successful: i64,
     pub tokens: i64,
     pub active_days: i64,
+    /// 区间内的积分消耗之和（`None` = 这段时间一条积分读数都没有，见
+    /// `DailyEntry::credit`）。逐天累加而不是从三张维度表求和：维度表里的
+    /// 组可能被手改的库改坏，日总量才是明细折算的权威投影。
+    pub credit: Option<f64>,
+    /// 区间内**上报了积分**的请求条数（覆盖度的分子）
+    pub credit_rows: i64,
+    /// 区间内的输入 token 之和（`prompt_tokens`，即 `cache_input_tokens` 那一列）。
+    /// 积分单价（每百万输入 token）的分母；`tokens` 是另一档口径的分母。
+    pub input_tokens: i64,
     pub model_totals: Vec<ModelAccum>,
     pub provider_totals: Vec<ProviderAccum>,
     pub account_totals: Vec<AccountAccum>,
@@ -178,6 +187,9 @@ pub(super) fn range_totals(
         successful: 0,
         tokens: 0,
         active_days: 0,
+        credit: None,
+        credit_rows: 0,
+        input_tokens: 0,
         model_totals: Vec::new(),
         provider_totals: Vec::new(),
         account_totals: Vec::new(),
@@ -189,12 +201,21 @@ pub(super) fn range_totals(
         totals.requests += day.requests;
         totals.successful += day.successful;
         totals.tokens += day.tokens;
+        total_credit(&mut totals.credit, day.credit);
+        totals.credit_rows += day.credit_rows;
+        totals.input_tokens += day.cache_input_tokens;
         // activeDays 只数**区间内**有请求的天数（补零的日子不算「活跃」）
         if day.requests > 0 {
             totals.active_days += 1;
         }
         for acc in &day.model_tokens {
-            push_model_accum(&mut totals.model_totals, &acc.model, acc.tokens, acc.requests);
+            push_model_accum(
+                &mut totals.model_totals,
+                &acc.model,
+                acc.tokens,
+                acc.requests,
+                acc.credit,
+            );
         }
         for acc in &day.provider_stats {
             push_provider_accum(
@@ -203,6 +224,8 @@ pub(super) fn range_totals(
                 acc.requests,
                 acc.successful,
                 acc.tokens,
+                acc.credit,
+                acc.credit_rows,
             );
         }
         for acc in &day.account_stats {
@@ -213,6 +236,8 @@ pub(super) fn range_totals(
                 acc.requests,
                 acc.successful,
                 acc.tokens,
+                acc.credit,
+                acc.credit_rows,
             );
         }
     }
@@ -228,6 +253,17 @@ pub(super) fn range_totals(
     let covered_requests: i64 = totals.provider_totals.iter().map(|item| item.requests).sum();
     let covered_successful: i64 = totals.provider_totals.iter().map(|item| item.successful).sum();
     let covered_tokens: i64 = totals.provider_totals.iter().map(|item| item.tokens).sum();
+    // 积分余量同理（旧行没有这一维）：差值落进「未知」组的积分槽。
+    // `None` 表示整段区间都没有读数，此时余量也只能是 `None` —— 不能因为
+    // 日总量有值就给未知组补一个 0，那会伪造出一组「花了 0 积分的未知承载者」。
+    let covered_credit: f64 = totals.provider_totals.iter().filter_map(|item| item.credit).sum();
+    let covered_credit_rows: i64 = totals.provider_totals.iter().map(|item| item.credit_rows).sum();
+    let rest_credit_rows = (totals.credit_rows - covered_credit_rows).max(0);
+    let rest_credit = if rest_credit_rows > 0 {
+        Some((totals.credit.unwrap_or(0.0) - covered_credit).max(0.0))
+    } else {
+        None
+    };
     // `max(0)` 兜住手改文件造成的「拆分比总量还多」；余量全零时这里仍会建出
     // 一个空组，但 `build_providers` 会把全零的组滤掉（见那边的 `requests > 0
     // || tokens > 0`），所以不会凭空冒出空的「未知」项
@@ -237,6 +273,8 @@ pub(super) fn range_totals(
         (totals.requests - covered_requests).max(0),
         (totals.successful - covered_successful).max(0),
         (totals.tokens - covered_tokens).max(0),
+        rest_credit,
+        rest_credit_rows,
     );
 
     // ── 账号维度同理 ────────────────────────────────────────────
@@ -247,6 +285,14 @@ pub(super) fn range_totals(
     let covered_requests: i64 = totals.account_totals.iter().map(|item| item.requests).sum();
     let covered_successful: i64 = totals.account_totals.iter().map(|item| item.successful).sum();
     let covered_tokens: i64 = totals.account_totals.iter().map(|item| item.tokens).sum();
+    let covered_credit: f64 = totals.account_totals.iter().filter_map(|item| item.credit).sum();
+    let covered_credit_rows: i64 = totals.account_totals.iter().map(|item| item.credit_rows).sum();
+    let rest_credit_rows = (totals.credit_rows - covered_credit_rows).max(0);
+    let rest_credit = if rest_credit_rows > 0 {
+        Some((totals.credit.unwrap_or(0.0) - covered_credit).max(0.0))
+    } else {
+        None
+    };
     push_account_accum(
         &mut totals.account_totals,
         "",
@@ -254,24 +300,54 @@ pub(super) fn range_totals(
         (totals.requests - covered_requests).max(0),
         (totals.successful - covered_successful).max(0),
         (totals.tokens - covered_tokens).max(0),
+        rest_credit,
+        rest_credit_rows,
     );
     totals
 }
 
 /// 把一次请求（或一天的累计）并进按模型的累计表。
 /// 线性查找即可：模型数量是个位到十位级，建 HashMap 反而更慢。
-pub(super) fn push_model_accum(list: &mut Vec<ModelAccum>, model: &str, tokens: i64, requests: i64) {
+pub(super) fn push_model_accum(
+    list: &mut Vec<ModelAccum>,
+    model: &str,
+    tokens: i64,
+    requests: i64,
+    credit: Option<f64>,
+) {
     match list.iter_mut().find(|item| item.model == model) {
         Some(item) => {
             item.tokens += tokens;
             item.requests += requests;
+            add_credit(&mut item.credit, credit);
         }
         None => list.push(ModelAccum {
             model: model.to_string(),
             requests,
             tokens,
+            credit,
         }),
     }
+}
+
+/// 把一条（或一天的）积分读数并进可空的累计槽。
+///
+/// `Option` 的三态在这里是**唯一**的处理点：`None` 表示这一维还没出现过
+/// 读数（保持 `None`），出现过一个就读数相加。明细侧的 `None`（没上报）由
+/// 调用方跳过，不会走到这里 —— 所以这里只需处理「有 / 没有」两态。
+fn add_credit(slot: &mut Option<f64>, value: Option<f64>) {
+    if let Some(value) = value {
+        *slot = Some(slot.unwrap_or(0.0) + value);
+    }
+}
+
+/// [`range_totals`] 逐天累加用的同名动作 —— 与 [`add_credit`] 是同一个
+/// 「`None` 不参与求和」的规则，但语义落在**区间**而不是**分组**上。
+///
+/// 单独包一层是为了让区间那处的调用点读起来是「累加这一天的积分」，
+/// 而不是一段就地解包（那一行勾着 `DailyEntry::credit` 的三态说明）。
+fn total_credit(slot: &mut Option<f64>, value: Option<f64>) {
+    add_credit(slot, value);
 }
 
 /// 报表按模型聚合用的**统计键**：上游真名优先，请求名回落。
@@ -339,6 +415,9 @@ pub(super) fn model_breakdown_json(list: &[ModelAccum]) -> Vec<Value> {
                 },
                 "tokens": item.tokens,
                 "requests": item.requests,
+                // 悬停读数里的积分同样三态：`null` = 这一格没有读数，
+                // 前端按「未记录」渲染而不是 0（与主卡片同一口径）
+                "credit": round_credit(item.credit),
             })
         })
         .collect()
@@ -356,18 +435,24 @@ pub(super) fn push_provider_accum(
     requests: i64,
     successful: i64,
     tokens: i64,
+    credit: Option<f64>,
+    credit_rows: i64,
 ) {
     match list.iter_mut().find(|item| item.provider == provider) {
         Some(item) => {
             item.requests += requests;
             item.successful += successful;
             item.tokens += tokens;
+            add_credit(&mut item.credit, credit);
+            item.credit_rows += credit_rows;
         }
         None => list.push(ProviderAccum {
             provider: provider.to_string(),
             requests,
             successful,
             tokens,
+            credit,
+            credit_rows,
         }),
     }
 }
@@ -392,12 +477,16 @@ pub(super) fn push_account_accum(
     requests: i64,
     successful: i64,
     tokens: i64,
+    credit: Option<f64>,
+    credit_rows: i64,
 ) {
     match list.iter_mut().find(|item| item.account_id == account_id) {
         Some(item) => {
             item.requests += requests;
             item.successful += successful;
             item.tokens += tokens;
+            add_credit(&mut item.credit, credit);
+            item.credit_rows += credit_rows;
             // 名字只做「快照刷新」：非空才覆盖，绝不清空已有的名字
             // （某些请求拿不到名字而另一些拿到了，取有名字的那一份）
             if !account_name.is_empty() {
@@ -410,6 +499,8 @@ pub(super) fn push_account_accum(
             requests,
             successful,
             tokens,
+            credit,
+            credit_rows,
         }),
     }
 }
@@ -470,6 +561,10 @@ pub(super) fn build_providers(totals: &[ProviderAccum]) -> Vec<Value> {
                 "success": item.successful,
                 "failures": (item.requests - item.successful).max(0),
                 "totalTokens": item.tokens,
+                // 积分（**新增键**，旧前端忽略）：三态口径同主卡片 ——
+                // `null` = 这一家没有读数，`0` = 上报了 0
+                "credit": round_credit(item.credit),
+                "creditRows": item.credit_rows,
             })
         })
         .collect()
@@ -521,6 +616,7 @@ pub(super) fn build_models(totals: &[ModelAccum]) -> Vec<Value> {
                 },
                 "requests": item.requests,
                 "totalTokens": item.tokens,
+                "credit": round_credit(item.credit),
             })
         })
         .collect()
@@ -567,6 +663,8 @@ pub(super) fn build_accounts(totals: &[AccountAccum]) -> Vec<Value> {
                 "success": item.successful,
                 "failures": (item.requests - item.successful).max(0),
                 "totalTokens": item.tokens,
+                "credit": round_credit(item.credit),
+                "creditRows": item.credit_rows,
             })
         })
         .collect()
@@ -675,7 +773,11 @@ pub(super) fn daily_trend(daily: &BTreeMap<String, DailyEntry>, start: &str, end
         let day = daily.get(&key);
         let (tokens, requests) = day.map(|item| (item.tokens, item.requests)).unwrap_or((0, 0));
         let models = day.map(|item| super::source_report::all_model_rows(&item.model_tokens)).unwrap_or_default();
-        let (clients, api_keys) = day.map(super::source_report::source_breakdown).unwrap_or_default();
+        let (clients, api_keys) = day.map(|item| super::source_report::source_breakdown).unwrap_or_default();
+        // 积分（**新增键**）：`credit` 为 `null` 表示这天没有读数（前端画线时
+        // 留断点而不是画到 0），`ppm` 同口径也是 `null`
+        let credit = day.and_then(|item| item.credit);
+        let credit_rows = day.map(|item| item.credit_rows).unwrap_or(0);
         out.push(json!({
             "date": key,
             "tokens": tokens,
@@ -683,6 +785,9 @@ pub(super) fn daily_trend(daily: &BTreeMap<String, DailyEntry>, start: &str, end
             "models": models,
             "clients": clients,
             "apiKeys": api_keys,
+            "credit": round_credit(credit),
+            "creditRows": credit_rows,
+            "ppm": credit_rate(credit, Some(tokens)),
         }));
         cursor += ChronoDuration::days(1);
     }
@@ -748,6 +853,297 @@ pub(super) fn cache_rates(totals: &[(i64, i64)]) -> Value {
     Value::Object(out)
 }
 
+/// 积分读数的小数位归一：保留 4 位。
+///
+/// 上游的 `credit` 是浮点数（WorkBuddy 实测 0.03～0.31），几十条相加之后会
+/// 出现 `0.30000000000000004` 这类尾数。它不影响计算，但会原样印在界面上；
+/// 在这里收一次口，比让每个前端调用点各写一遍 `toFixed` 更可靠。
+///
+/// `None` 原样返回 —— 「没有读数」不能被归一成一个数。
+fn round_credit(value: Option<f64>) -> Option<f64> {
+    value
+        .filter(|value| value.is_finite())
+        .map(|value| (value * 10_000.0).round() / 10_000.0)
+}
+
+/// 「每百万 token 多少积分」。
+///
+/// 分母为 0（区间里没有用量）或分子没有读数时返回 `None`：前端显示「—」，
+/// 而不是 0 或 NaN。**不夹取**（与 `safe_rate` 同一取向）：积分与 token
+/// 是两个独立读数，上游可能给出「有积分、没报 token」这类组合，如实返回是
+/// 唯一不误导的做法。
+fn credit_rate(credit: Option<f64>, tokens: Option<i64>) -> Option<f64> {
+    let credit = credit.filter(|value| value.is_finite() && *value >= 0.0)?;
+    let tokens = tokens?;
+    if tokens <= 0 {
+        return None;
+    }
+    let rate = credit / (tokens as f64 / 1_000_000.0);
+    rate.is_finite().then_some((rate * 100.0).round() / 100.0)
+}
+
+/// 区间级的积分维度 → `/api/stats/summary` 的 `credits` 键（**新增键**）。
+///
+/// ── 它回答的三个问题 ────────────────────────────────────────
+///   1. 这段时间一共花了多少积分（`total`）；
+///   2. 平均每百万 token 要多少积分（`ppm` / `ppmInput`）——
+///      用户口径的「换算」就是这一条；
+///   3. 按 provider / 账号 / 模型分别是多少（三张排行）。
+///
+/// ── `coverage` 与 `complete` ────────────────────────────────
+/// 积分是**逐家自愿上报**的读数（WorkBuddy 的 `usage.credit` 有，别家没有）。
+/// 请求数减去「上报了积分的条数」就是这段时间里读不到的那一截。`coverage`
+/// 让界面能说「这个合计只覆盖了 81% 的成功请求」，而不是把一个偏小的数
+/// 当成全部消耗。`complete` 是 `coverage == 1` 的布尔投影，省得前端比浮点。
+///
+/// ── `mixed` ────────────────────────────────────────────────
+/// `core::upstream::usage::CREDIT_KEYS` 把 Cline 的 `usage.cost`（**美元**）
+/// 与积分共用同一列。多于一家都在报读数时，`total` 是一个没有单位的和 ——
+/// 界面据此把「总积分」换成「分家表格」展示（见 `report-page` 的说明）。
+///
+/// ── `forecast` ─────────────────────────────────────────────
+/// 近 7 天（含今天）的逐日积分与加权单价，以及「按日均消耗，剩余额度还能
+/// 跑几天」。`daysLeft` 需要两侧同源（余额与消耗是同一单位），只有
+/// `account_usage_records.remaining` 有值时才可能算出来 —— 见
+/// `days_left` 的说明；这里只把原料交给前端，除法留给前端做：它知道
+/// 当前账号页读到的余额，不必让报表接口再去查一次账号表。
+///
+/// 入参是 `range_totals` 的结果（区间总量与三张维度表），本函数**纯函数**、
+/// 不碰库。
+pub(super) fn credit_summary(
+    totals: &RangeTotals,
+    daily: &BTreeMap<String, DailyEntry>,
+    start: &str,
+    end: &str,
+    today: NaiveDate,
+) -> Value {
+    let credit = round_credit(totals.credit);
+    // coverage 的分母用 successful 而不是 requests：失败的请求不产生用量
+    // （`normalize` 已把失败的 credit/token 清空），拿它们当分母只会把覆盖度
+    // 无端拉低。
+    let coverage = if totals.successful > 0 {
+        (totals.credit_rows as f64 / totals.successful as f64).min(1.0)
+    } else {
+        0.0
+    };
+    let providers = build_credit_groups(&totals.provider_totals.iter().map(|item| CreditGroup {
+        id: item.provider.clone(),
+        label: if item.provider.is_empty() {
+            UNKNOWN_PROVIDER_LABEL.to_string()
+        } else {
+            provider_label(&item.provider)
+        },
+        requests: item.requests,
+        successful: item.successful,
+        credit: item.credit,
+        credit_rows: item.credit_rows,
+        tokens: item.tokens,
+    }).collect::<Vec<_>>());
+    let accounts = build_credit_groups(&totals.account_totals.iter().map(|item| CreditGroup {
+        id: item.account_id.clone(),
+        // 与 `build_accounts` 同一取法：快照名 → id → 「未知账号」
+        label: if !item.account_name.is_empty() {
+            item.account_name.clone()
+        } else if !item.account_id.is_empty() {
+            item.account_id.clone()
+        } else {
+            UNKNOWN_ACCOUNT_LABEL.to_string()
+        },
+        requests: item.requests,
+        successful: item.successful,
+        credit: item.credit,
+        credit_rows: item.credit_rows,
+        tokens: item.tokens,
+    }).collect::<Vec<_>>());
+    let models = build_credit_groups(&totals.model_totals.iter().map(|item| CreditGroup {
+        id: item.model.clone(),
+        label: if item.model.is_empty() {
+            UNKNOWN_MODEL_LABEL.to_string()
+        } else {
+            item.model.clone()
+        },
+        requests: item.requests,
+        // 模型累计没有成功 / 失败之分（`ModelAccum` 只记条数），
+        // 覆盖度在这里退化成「有读数 / 请求数」，与其它两维同口径
+        successful: item.requests,
+        credit: item.credit,
+        // 模型累计没有单列 credit_rows（它的口径就是「这一天有几条」）：
+        // 有读数就按该组的请求数算，没有就是 0
+        credit_rows: if item.credit.is_some() { item.requests } else { 0 },
+        tokens: item.tokens,
+    }).collect::<Vec<_>>());
+
+    // ── 混单位的判据 ──────────────────────────────────────────
+    // 只数**有积分读数且身份非空**的提供商：
+    //   - 空 id 那一组是「未知承载者」的余量（旧聚合行没有 provider 维度），
+    //     它不是一个独立的计费单位，把它算进去会让「只有一家在报积分」的用户
+    //     被误判成混单位；
+    //   - 没有读数的家不贡献任何数值，自然也谈不上单位。
+    // 只有一家时合计是可信的；两家以上时合计没有单位意义。
+    let reporting = totals
+        .provider_totals
+        .iter()
+        .filter(|item| item.credit.is_some() && !item.provider.is_empty())
+        .count();
+    let mixed = reporting > 1;
+
+    let forecast = credit_forecast(daily, today);
+
+    json!({
+        "total": credit,
+        "rows": totals.credit_rows,
+        "requests": totals.requests,
+        "successful": totals.successful,
+        "coverage": (coverage * 10_000.0).round() / 10_000.0,
+        "complete": totals.successful > 0 && totals.credit_rows >= totals.successful,
+        "mixed": mixed,
+        "tokens": totals.tokens,
+        "inputTokens": totals.input_tokens,
+        "ppm": credit_rate(totals.credit, Some(totals.tokens)),
+        "ppmInput": credit_rate(totals.credit, Some(totals.input_tokens)),
+        "byProvider": providers,
+        "byAccount": accounts,
+        "byModel": models,
+        // 区间起止随读返回：预测卡的文案要写「近 7 天」到底是哪 7 天，
+        // 让前端自己算日期会在跨年 / 跨时区时与后端错开
+        "range": { "start": start, "end": end },
+        "forecast": forecast,
+    })
+}
+
+/// 积分维度的一行（三个排行共用）。`id` 在模型维度上是模型名 ——
+/// 与 `build_models` 同一取舍（模型名既是身份也是展示名）。
+struct CreditGroup {
+    id: String,
+    label: String,
+    requests: i64,
+    /// 成功请求数（覆盖度的分母；与 `credit_rows` 同一口径）。
+    /// 模型累计没有这一列，直接用 `requests`（模型维度的每一条都是定局行）。
+    successful: i64,
+    credit: Option<f64>,
+    credit_rows: i64,
+    tokens: i64,
+}
+
+/// 积分排行：按积分降序，并列比 tokens、再并列比 id。
+///
+/// ── 只保留**有读数**的组 ─────────────────────────────────────
+/// 与 `build_providers` 的「全零组不返回」取向一致，但判据换成「有没有读数」：
+/// 这家跑了 100 次请求却一条积分都不报，出现在一张叫「积分消耗排行」的表里
+/// 只会是一行「—」。它们没有贡献任何数值，滤掉之后这张表之和仍然等于
+/// `total`（见 `credit_summary` 的 coverage 说明 —— 覆盖不到的请求由覆盖率
+/// 这个读数表达，不由空行表达）。
+///
+/// **有读数但为 0 的组照常返回**：一家报 0 积分是一条真实信息。
+fn build_credit_groups(groups: &[CreditGroup]) -> Vec<Value> {
+    let mut rows: Vec<&CreditGroup> = groups
+        .iter()
+        .filter(|item| item.credit.is_some())
+        .collect();
+    rows.sort_by(|left, right| {
+        let credit = |row: &CreditGroup| row.credit.unwrap_or(f64::NEG_INFINITY);
+        credit(right)
+            .partial_cmp(&credit(left))
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(right.tokens.cmp(&left.tokens))
+            .then(left.id.cmp(&right.id))
+    });
+    rows.into_iter()
+        .map(|item| {
+            json!({
+                "id": item.id,
+                "label": item.label,
+                "requests": item.requests,
+                // `success` 与 `build_providers` / `build_accounts` 同名同义：
+                // 积分卡的「覆盖率」列要用它当分母（失败请求不产生用量）
+                "success": item.successful,
+                "credit": round_credit(item.credit),
+                "creditRows": item.credit_rows,
+                "tokens": item.tokens,
+                "ppm": credit_rate(item.credit, Some(item.tokens)),
+            })
+        })
+        .collect()
+}
+
+/// 近 7 天（含今天）的积分走势与加权单价。
+///
+/// ── 为什么固定 7 天、与 range 解耦 ────────────────────────────
+/// 预测要的是「最近的消耗速度」。把区间切到「今天」时近 7 天仍然要看得到
+/// （否则只有一两天的数据，预测会剧烈跳动）；切到「全部」时也只取最近一周
+/// （一年前的价格对现在的预测没有意义）。这与热力图固定 365 天是同一取舍：
+/// 预测卡有自己的时间窗口，不跟筛选器走。
+///
+/// ── 加权为什么用 0.75^k 而不是等权 ──────────────────────────
+/// 积分单价随模型与缓存命中率漂移。等权平均会让 7 天前的一次性大单一直
+/// 拖住预测值；指数衰减让「昨天」比「6 天前」重一倍多（0.75^-1 ≈ 1.33），
+/// 又不至于像「只看最近两天」那样被一次异常请求带偏。
+///
+/// 返回的 `dailyCredit` 是**逐日原值**（含 0 与 `null`），前端折线直接用；
+/// 加权只在单价`weightedPpm` 里做。两者分开是刻意的：图上要给人看真实读数，
+/// 加权是模型内部的中间量。
+fn credit_forecast(daily: &BTreeMap<String, DailyEntry>, today: NaiveDate) -> Value {
+    const WINDOW: i64 = 7;
+    let mut points = Vec::with_capacity(WINDOW as usize);
+    let mut weight_credit = 0.0;
+    let mut weight_tokens = 0.0;
+    let mut credit_days = 0i64;
+    for offset in (0..WINDOW).rev() {
+        let day = today - ChronoDuration::days(offset);
+        let key = date_key(day);
+        let row = daily.get(&key);
+        let credit = row.and_then(|item| item.credit);
+        // 权重：今天 = 1，昨天 = 0.75，依此类推
+        let weight = 0.75f64.powi(offset as i32);
+        if let Some(value) = credit {
+            credit_days += 1;
+            weight_credit += value * weight;
+            // 单价的分母同样按权重收：这天没报 token 时它就是 0 贡献，
+            // 不会凭空放大单价（分子权重与分母权重同步）
+            weight_tokens += row.map(|item| item.tokens).unwrap_or(0) as f64 * weight;
+        }
+        points.push(json!({
+            "date": key,
+            // `round_credit(None)` 序列化成 `null` —— 折线据此留断点
+            "credit": round_credit(credit),
+            "tokens": row.map(|item| item.tokens).unwrap_or(0),
+            "requests": row.map(|item| item.requests).unwrap_or(0),
+        }));
+    }
+    let weighted_ppm = if weight_tokens > 0.0 && weight_credit >= 0.0 {
+        let rate = weight_credit / (weight_tokens / 1_000_000.0);
+        rate.is_finite().then(|| (rate * 100.0).round() / 100.0)
+    } else {
+        None
+    };
+    // 日均：只按**有读数的天数**平均，否则「不报积分的那几天」会把均值稀释成 0，
+    // 从而让「还能用几天」被高估。
+    let daily_avg = if credit_days > 0 {
+        let sum: f64 = (0..WINDOW)
+            .filter_map(|offset| {
+                let key = date_key(today - ChronoDuration::days(offset));
+                daily.get(&key).and_then(|item| item.credit)
+            })
+            .sum();
+        Some(((sum / credit_days as f64) * 10_000.0).round() / 10_000.0)
+    } else {
+        None
+    };
+    json!({
+        "windowDays": WINDOW,
+        "creditDays": credit_days,
+        "points": points,
+        "weightedPpm": weighted_ppm,
+        // 「百万 token 要多少积分」的直接答案（未加权版本用区间单价，
+        // 这里给近 7 天口径，预测卡两处都展示时不会互相矛盾）
+        "perMillion": weighted_ppm,
+        "perThreeMillion": weighted_ppm.map(|rate| (rate * 3.0 * 100.0).round() / 100.0),
+        "dailyAvg": daily_avg,
+        // 注意：`daysLeft` 不在这里算 —— 它需要余额，而余额属于账号域。
+        // 前端已知当前账号余额时用 `dailyAvg` 除一下即可（见 report-page）。
+    })
+}
+
 /// 近 24 个**本地整点**的命中率与用量趋势（无数据的整点补零）。
 ///
 /// 按本地时区切整点：先把时间戳还原成 `DateTime<Local>` 再取 `%H`，
@@ -797,6 +1193,11 @@ pub(super) fn cache_trend_24h(entries: &[SummaryRow], now: i64) -> Vec<Value> {
             model_stat_key(&item.model, &item.upstream_model),
             item.total_tokens,
             1,
+            // 近 24 小时这一档**不带积分**：`SummaryRow` 只有 6 列（含
+            // `idx_requests_summary` 的纯索引扫描），加一列 `credit` 会让那条
+            // 查询退化成回表。积分的时间维度由 `dailyTrend`（按天，来自聚合行）
+            // 承担，逐小时的积分不是本次要回答的问题。
+            None,
         );
     }
 

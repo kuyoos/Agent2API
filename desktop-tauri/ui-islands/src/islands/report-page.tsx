@@ -19,6 +19,7 @@ import { CacheTrendChart, UsageDonut } from './report/report-recharts'
 import { SourceStatsPanel } from './report/source-stats'
 import { ApiKeyUsageDialog } from './report/api-key-detail'
 import { ReportDailyTrend } from './report/daily-trend-panel'
+import { CreditPanel } from './report/credit-panel'
 import { DateRangeFields } from './date-range-fields'
 import { updateCustomRange } from '../../../ui-shared/date-range'
 
@@ -692,6 +693,9 @@ function ReportPage() {
           <span>{t('无请求的整点按 0% 计，但不写读数')}</span>
         </CardFooter>
       </Card>
+
+      {/* ── 积分消耗（读数 + 按天折线；`credits` 缺失时整块不渲染）── */}
+      <CreditPanel summary={summary} />
 
       <ReportDailyTrend summary={summary} loading={loading} />
 

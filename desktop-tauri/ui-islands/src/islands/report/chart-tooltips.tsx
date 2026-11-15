@@ -1,9 +1,9 @@
 import * as React from 'react'
 import { Tooltip, TooltipContent, TooltipProvider } from '@ui'
 import type { TooltipContentProps } from 'recharts'
-import { dayLabel, formatInt, formatPercent, formatTokens, hourText, type DonutDatum } from '../report-charts'
+import { dayLabel, formatCredit, formatCreditRate, formatInt, formatPercent, formatTokens, hourText, type DonutDatum } from '../report-charts'
 import { t } from '../../i18n'
-import type { CacheTrendRow, DailyTrendRow, ModelSlice } from './chart-data'
+import type { CacheTrendRow, CreditTrendRow, DailyTrendRow, ModelSlice } from './chart-data'
 
 type ChartTooltipProps = Pick<TooltipContentProps, 'active' | 'payload' | 'coordinate'> & {
   container: React.RefObject<HTMLDivElement | null>
@@ -96,6 +96,25 @@ export function CacheTooltip(props: ChartTooltipProps) {
       </div>
       <TooltipRow name={t('总 Token')} value={<TokenValue value={row.totalTokens} />} />
       <ModelRows rows={row.models} />
+    </ChartTooltip>
+  )
+}
+
+export function CreditTooltip(props: ChartTooltipProps) {
+  const row = props.payload.find(item => item.payload)?.payload as CreditTrendRow | undefined
+  if (!props.active || !row) return null
+  return (
+    <ChartTooltip {...props}>
+      <div className='report-chart-tooltip-title'>{dayLabel(row.date)}</div>
+      <TooltipRow name={t('积分消耗')} value={
+        <b className='report-chart-tooltip-value'>{row.credit === null ? '—' : formatCredit(row.credit)}</b>
+      } />
+      <TooltipRow name={t('每百万 Token 积分')} value={
+        <b className='report-chart-tooltip-value'>{row.ppm === null ? '—' : formatCreditRate(row.ppm)}</b>
+      } />
+      <TooltipRow name={t('总 Token')} value={<TokenValue value={row.tokens} />} />
+      <TooltipRow name={t('总请求数')} value={<b className='report-chart-tooltip-value'>{formatInt(row.requests)}</b>} />
+      {row.credit === null ? <div className='report-chart-tooltip-sub'>{t('这天没有积分读数')}</div> : null}
     </ChartTooltip>
   )
 }

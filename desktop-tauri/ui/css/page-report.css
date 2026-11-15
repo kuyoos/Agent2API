@@ -563,6 +563,72 @@
   font-size: 10.5px;
 }
 
+/* 积分卡「按提供商分列」那一行：混单位时合计不可信，这句先解释为什么没有合计。
+   放在表格之上、比正文轻一档，与卡头的 panel-sub 同一视觉层级。 */
+.report-credit-split-title {
+  margin-bottom: -4px;
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+
+/* ── 积分卡的分家表（混单位时用）──
+   四列：提供商 / 积分消耗 / 每百万 Token 积分 / 覆盖率。
+   **刻意不做百分比条**：混单位时各行之和没有意义，画条等于在给一个不存在的
+   分母「上色」—— 与排行卡（同一单位的量）不是一个语义，不能复用 .rank-shares。
+   列宽用 max-content 名字列 + 三个定宽数字列，数字右对齐、等宽，竖着扫时
+   小数点能对齐；行数随提供商数走，超过约 6 行在卡内滚动（与 .rank-shares 同一手法）。 */
+.report-credit-table {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 88px 96px 56px;
+  align-items: center;
+  gap: 6px 12px;
+  max-height: 200px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-inset);
+}
+
+.report-credit-table-head,
+.report-credit-table-row {
+  display: grid;
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
+  align-items: baseline;
+}
+
+.report-credit-table-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--surface-inset);
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+.report-credit-table-head > span:not(:first-child),
+.report-credit-table-row > .num,
+.report-credit-table-row > .pct {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.report-credit-table-row { font-size: 12.5px; }
+
+.report-credit-table-row .name {
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.report-credit-table-row .pct { color: var(--text-2); }
+
 /* 错误态：与 .empty 同档，但用危险色点明「这些数字现在不可信」 */
 .report-error { color: var(--danger); }
 

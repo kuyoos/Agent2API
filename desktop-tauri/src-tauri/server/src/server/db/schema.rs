@@ -338,7 +338,13 @@ pub fn is_reserved(key: &str) -> bool {
 /// 请求日志新增「积分」列读它。与 token 四列刻意不同：这一列**可空 REAL** ——
 /// `NULL` = 这一家没上报（旧行 / 不提供该读数），0 = 确实零消耗；用 0 兜底会
 /// 把「没读到」画成「花了 0 积分」，比缺一列更难排查。
-pub const SCHEMA_VERSION: i64 = 24;
+///
+/// ── 版本 25：`request_daily` 补积分聚合两列（[`V25_SCHEMA`]）─────
+/// 把 v23 的积分读数接进**报表**。明细有 `credit` 但聚合行没有，而报表的
+/// 区间统计只读聚合（理由见 `report` 模块头），于是积分只算得出 24 小时这一档。
+/// 两列的分工（`credit` = 和 / `credit_rows` = 上报条数）与 v23 那条
+/// 「`NULL` 不等于 0」是同一件事，落点从明细挪到了聚合 —— 详见 [`V25_SCHEMA`]。
+pub const SCHEMA_VERSION: i64 = 25;
 
 /// 版本 1 的全部表与索引：改造前所有 JSON / JSONL 文件的对应形态。
 ///
@@ -897,6 +903,29 @@ const V23_SCHEMA: &str = "
 ALTER TABLE requests ADD COLUMN credit REAL;
 ";
 
+/// 版本 25：`request_daily` 补积分聚合两列（schema v25）。
+///
+/// 明细的 `requests.credit` 是 v23 加的，但报表的区间统计**只读聚合行**
+/// （热力图固定 365 天、`all` 可能跨年；明细有容量闸、且只服务近 24 小时趋势，
+/// 见 `request_stats::report` 模块头的数据来源分工）。没有这两列时，积分读数
+/// 只算得出「近 24 小时」这一档，7 天 / 30 天 / 全部一律空白。
+///
+/// ── 为什么是两列而不是一列 ──────────────────────────────────
+/// 与 v23 定下的那条规则同源：`credit` 是**读数的和**，`credit_rows` 是
+/// **上报了读数的请求条数**。只有和一个数在库里时，「上报了 0 积分」与
+/// 「这一家根本不报积分」在汇总后就再也分不开 —— 两者都是 0。
+/// `credit_rows = 0` 才是「这天没有任何积分读数」，报表据此显示「未记录」
+/// 而不是「0 积分」（与请求日志同一口径）。
+///
+/// 两列都可空 / 带默认值，存量库升级后旧行是 `NULL` + `0`，如实表达
+/// 「这一天的聚合写在这两列存在之前」。历史回填走
+/// `RequestStats::backfill_credit_once`（按明细重算），见那边的 marker 说明。
+const V25_SCHEMA: &str = "
+-- ── request_daily 补积分聚合列（schema v25）─────────────────
+ALTER TABLE request_daily ADD COLUMN credit REAL;
+ALTER TABLE request_daily ADD COLUMN credit_rows INTEGER NOT NULL DEFAULT 0;
+";
+
 /// 把库升到 [`SCHEMA_VERSION`]（幂等：已是最新版时什么都不做）。
 ///
 /// **库版本高于本程序时返回 `Err` 拒绝打开**（v14 起有意反转的一条既有决定，
@@ -1073,6 +1102,8 @@ fn apply_version(
         // v23：requests 补「积分消耗」一列（请求日志的积分列，见 V23_SCHEMA）
         23 => conn.execute_batch(V23_SCHEMA),
         24 => conn.execute_batch(include_str!("schema_client_identification.sql")),
+        // v25：request_daily 补积分聚合两列（报表的积分维度，见 V25_SCHEMA）
+        25 => conn.execute_batch(V25_SCHEMA),
         _ => Ok(()),
     }
 }

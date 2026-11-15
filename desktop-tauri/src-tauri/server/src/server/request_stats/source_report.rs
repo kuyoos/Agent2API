@@ -40,7 +40,13 @@ fn merge_key(list: &mut Vec<ApiKeyAccum>, incoming: &ApiKeyAccum) {
             merge_client(&mut item.clients, &client.client, &client.label, &client.usage);
         }
         for model in &incoming.models {
-            push_model_accum(&mut item.models, &model.model, model.tokens, model.requests);
+            push_model_accum(
+                &mut item.models,
+                &model.model,
+                model.tokens,
+                model.requests,
+                model.credit,
+            );
         }
     } else {
         list.push(incoming.clone());
@@ -58,6 +64,9 @@ pub(super) fn fold_sources(day: &mut DailyEntry, item: &RequestEntry) {
         models: vec![ModelAccum {
             model: model_stat_key(&item.model, &item.upstream_model).to_string(),
             requests: 1, tokens: item.total_tokens,
+            // API Key 明细里的模型分解同样带积分（报表要回答「这把 Key 花在
+            // 哪个模型上」）；`None` 原样透传，不在这里判空
+            credit: item.credit,
         }],
     });
 }

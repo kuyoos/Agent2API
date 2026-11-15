@@ -704,6 +704,22 @@ pub struct DailyEntry {
     /// 计入缓存口径的输入 token 数（命中率的分母）
     #[serde(rename = "cacheInputTokens", default)]
     pub cache_input_tokens: i64,
+    /// 当天上报的积分消耗之和（schema v25）。
+    ///
+    /// `None` = 这一天**没有任何请求上报积分**（那一家的 usage 里没有积分别名，
+    /// 或这一天全在 v23 之前）；`Some(0.0)` = 上报了、且确实是 0。
+    /// 与 `requests.credit` 同一口径，只是从逐条求和搬到了按天（见 `V25_SCHEMA`）。
+    ///
+    /// 为什么不干脆用 `f64` 的 0 当缺省：报表要区分「未记录」与「0 积分」——
+    /// 前者显示「—」，后者显示「0」，混成一个数会让用户以为这一家免费。
+    #[serde(default)]
+    pub credit: Option<f64>,
+    /// 当天**上报了积分**的请求条数（schema v25）。
+    ///
+    /// 与 `credit` 一起构成覆盖度：`credit_rows / successful` 回答「这一天的
+    /// 积分读数可不可信」。0 = 没有任何读数，**不是**「都花了 0」。
+    #[serde(rename = "creditRows", default)]
+    pub credit_rows: i64,
     /// 当天的按模型累计（**契约之外的补充字段**）。
     ///
     /// 为什么必须存在：`topModel` 要按区间跨天累计，而报表侧只从明细取近
@@ -753,6 +769,8 @@ impl DailyEntry {
             tokens: 0,
             cache_hit_tokens: 0,
             cache_input_tokens: 0,
+            credit: None,
+            credit_rows: 0,
             model_tokens: Vec::new(),
             provider_stats: Vec::new(),
             account_stats: Vec::new(),
@@ -771,6 +789,10 @@ pub struct ModelAccum {
     pub requests: i64,
     #[serde(default)]
     pub tokens: i64,
+    /// 这个模型在这一天的积分消耗之和（schema v25 起；旧行读成 `None`）。
+    /// `None` 与 `Some(0.0)` 的区别同 `DailyEntry::credit`。
+    #[serde(default)]
+    pub credit: Option<f64>,
 }
 
 /// 单个 provider 在某天的累计（聚合行的组成部分，W4 新增）。
@@ -791,6 +813,16 @@ pub struct ProviderAccum {
     pub successful: i64,
     #[serde(default)]
     pub tokens: i64,
+    /// 这一家在这一天的积分消耗之和（schema v25 起；旧行读成 `None`）。
+    ///
+    /// **跨家求和要小心**：`core::upstream::usage::CREDIT_KEYS` 把 Cline 的
+    /// `usage.cost`（美元）也认作积分，两家混在一起时这个和没有单位意义 ——
+    /// 报表侧的 `credits.mixed` 标记就是为这件事存在的。
+    #[serde(default)]
+    pub credit: Option<f64>,
+    /// 这一家里**上报了积分**的请求条数（`credit` 为 `None` 的行不计）。
+    #[serde(rename = "creditRows", default)]
+    pub credit_rows: i64,
 }
 
 /// 单个账号在某天的累计（聚合行的组成部分）。
@@ -819,6 +851,15 @@ pub struct AccountAccum {
     pub successful: i64,
     #[serde(default)]
     pub tokens: i64,
+    /// 这个账号在这一天的积分消耗之和（schema v25 起；旧行读成 `None`）。
+    ///
+    /// 账号维度是「哪个登录态在花积分」的唯一答案，也是预测「剩余额度还能
+    /// 跑几天」时与 `account_usage_records.remaining` 对比的那一侧。
+    #[serde(default)]
+    pub credit: Option<f64>,
+    /// 这个账号里**上报了积分**的请求条数。
+    #[serde(rename = "creditRows", default)]
+    pub credit_rows: i64,
 }
 
 /// 明细查询条件（「模型请求日志」页用）——

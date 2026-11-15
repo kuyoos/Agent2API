@@ -247,10 +247,10 @@ pub struct ServerState {
     /// 不会被感知**（要下次启动才发现）—— 这是可接受的：手工放回文件的人
     /// 本来就知道自己在做什么。
     upgrade_pending: Arc<AtomicBool>,
-    /// 启动期的历史统计整理（模型维度回填 / 来源维度回填 / 保留期裁剪）是否
-    /// 还在后台跑。
+    /// 启动期的历史统计整理（模型维度回填 / 来源维度回填 / 积分聚合回填 /
+    /// 保留期裁剪）是否还在后台跑。
     ///
-    /// 这三件事都可能扫描整张 `requests` 表：库大时几十秒起步，而它们的结果
+    /// 这几件事都可能扫描整张 `requests` 表：库大时几十秒起步，而它们的结果
     /// 只影响报表与历史清理，不影响面板能不能打开、账号能不能用。所以从
     /// `bootstrap` 里挪到监听端口成功之后（见 [`Self::start_background_maintenance`]）。
     /// 字段对外只读，供 `/api/session` 告诉界面「历史数据还在整理」。
@@ -875,10 +875,10 @@ impl ServerState {
     /// 在监听端口成功之后启动历史统计整理（由 [`start`] 调用，只生效一次）。
     ///
     /// ── 为什么放在这里而不是 `bootstrap` ────────────────────────
-    /// `bootstrap` 返回之前不能 bind 端口，而这三件事（模型维度回填 / 来源
-    /// 维度回填 / 保留期裁剪）都可能扫描整张 `requests` 表。库大的升级场景里，
-    /// 它们会让「程序启动了、网页却打不开」持续几十秒 —— 用户看到的就是转圈。
-    /// 现在先让 HTTP 服务可用，这三件事在阻塞线程池里慢慢跑。
+    /// `bootstrap` 返回之前不能 bind 端口，而这几件事（模型维度回填 / 来源
+    /// 维度回填 / 积分聚合回填 / 保留期裁剪）都可能扫描整张 `requests` 表。
+    /// 库大的升级场景里，它们会让「程序启动了、网页却打不开」持续几十秒 ——
+    /// 用户看到的就是转圈。现在先让 HTTP 服务可用，这几件事在阻塞线程池里慢慢跑。
     ///
     /// ── 为什么不跟账号迁移一起挪 ────────────────────────────────
     /// `account_bootstrap` 的结果直接被账号页与选路读取，且量级小（账号通常
@@ -887,7 +887,7 @@ impl ServerState {
     ///
     /// ── 待迁移数据还没导入时 ────────────────────────────────────
     /// 与 `bootstrap` 的判据一致：整块跳过。用户点完升级后，`api::upgrade_api`
-    /// 会按原顺序补调这三件事（那时 HTTP 早已在跑，慢也不会挡住面板）。
+    /// 会按原顺序补调这几件事（那时 HTTP 早已在跑，慢也不会挡住面板）。
     pub fn start_background_maintenance(&self) {
         if self.upgrade_pending() {
             logging::log(
@@ -909,6 +909,9 @@ impl ServerState {
             let outcome = tokio::task::spawn_blocking(move || {
                 stats.remap_model_dimension_once();
                 stats.backfill_source_dimensions();
+                // 积分聚合（schema v25）回填：与上面两条同一时机 —— 旧聚合行
+                // 缺的两个积分列在这里按明细补上（见 `backfill_credit_once`）
+                stats.backfill_credit_once();
                 stats.prune();
             })
             .await;

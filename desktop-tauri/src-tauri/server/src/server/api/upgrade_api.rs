@@ -158,6 +158,9 @@ pub async fn run_upgrade(State(state): State<ServerState>) -> Response {
             // 的报表会一直把映射别名当成独立模型。
             request_stats.remap_model_dimension_once();
             request_stats.backfill_source_dimensions();
+            // 积分聚合（schema v25）：导入的旧聚合行同样没有这两列，
+            // 与上面两条同一时机补算（见 `backfill_credit_once`）
+            request_stats.backfill_credit_once();
             request_stats.prune();
             if let Some(logs) = logging::store_ref() {
                 logs.prune();

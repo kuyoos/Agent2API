@@ -14,6 +14,15 @@ export type CacheTrendRow = {
   hour: string; rate: number; totalTokens: number; hitTokens: number; inputTokens: number
   used: boolean; models: ModelSlice[]
 }
+export type CreditTrendRow = {
+  date: string
+  /** `null` = 这天没有任何积分读数（折线在这里留断点，不画成 0） */
+  credit: number | null
+  /** `null` = 算不出单价（没有积分或没有用量） */
+  ppm: number | null
+  tokens: number
+  requests: number
+}
 export type ModelLegendRow = { name: string; fill: string }
 
 function amount(value: unknown): number {
@@ -81,6 +90,25 @@ export function cacheTrendData(series: StatsHour[], colors: Map<string, string>)
       hour: String(hour.hour || ''), rate: amount(hour.rate),
       totalTokens: amount(hour.totalTokens), hitTokens, inputTokens,
       used: inputTokens + hitTokens > 0, models: modelSlices(hour.models, colors),
+    }
+  })
+}
+
+/**
+ * 积分折线的数据。`credit` 只在**当天真有读数**时给数字：
+ * 缺失/`null` 一律保持 `null`，让 Recharts 把这段折线断开 —— 补成 0 会画出
+ * 「这天花了 0 积分」，而事实是这天没有读数（没上报，不等于免费）。
+ */
+export function creditTrendData(series: StatsDay[]): CreditTrendRow[] {
+  return (Array.isArray(series) ? series : []).map(day => {
+    const credit = day?.credit === null || day?.credit === undefined ? Number.NaN : Number(day.credit)
+    const ppm = day?.ppm === null || day?.ppm === undefined ? Number.NaN : Number(day.ppm)
+    return {
+      date: String(day?.date || ''),
+      credit: Number.isFinite(credit) ? credit : null,
+      ppm: Number.isFinite(ppm) ? ppm : null,
+      tokens: amount(day?.tokens),
+      requests: amount(day?.requests),
     }
   })
 }
