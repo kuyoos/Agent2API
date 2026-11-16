@@ -1,22 +1,21 @@
 #!/usr/bin/env bash
-# 手动应急补发入口：正常发布由构建仓库的 publish-installers.yml 完成。
+# 手动应急补发入口：正常发布由本仓库 build.yml 的 publish job 自动完成。
 # 本脚本仅用于旧版本收尾或工作流不可用时的人工补发。
 #
 #   bash scripts/release.sh vX.Y.Z            # 自动找该 tag 的可用构建 run
 #   bash scripts/release.sh vX.Y.Z <run-id>   # 或显式指定 run
 #
-# ── 2026-10：构建与发布都在独立构建仓库 ────────────────────────
-# 编译已搬到 `Agent2Builder/agent2api-releases`（主仓库推 tag 只发一条
-# `repository_dispatch`，见 `.github/workflows/build.yml`）。所以本脚本
-# 找 run、下载 artifact、建 Release 全部指向**构建仓库**，不是当前目录的
-# origin。目标仓库可用 `BUILD_REPO` 环境变量覆盖：
+# ── 本 fork：构建、发布与更新都在同一个仓库 ────────────────────
+# 上游把编译派发到独立构建账号（`Agent2Builder/agent2api-releases`）。本 fork
+# 没有那个账号与令牌，编译与发布都在 `kuyoos/Agent2API` 自己的 Actions 里跑
+# （见 `.github/workflows/build.yml`）。所以本脚本找 run、下载 artifact、建
+# Release 全部指向当前项目仓库。目标仓库可用 `BUILD_REPO` 环境变量覆盖：
 #
 #   BUILD_REPO=SomeOwner/some-repo bash scripts/release.sh v3.2.0
 #
-# 之所以不写死成「当前 origin」：本脚本在源码仓库里运行，而 run 在构建仓库里。
 # 这个值与 `desktop-tauri/src-tauri/server/src/server/core/update/version.rs`
-# 的 `DEFAULT_REPO`、以及索引仓库 `app.json` 的 `app.repo` 必须指向同一个
-# 地方 —— 三处不一致的症状是「Release 建出来了，但没有人收到更新」。
+# 的 `DEFAULT_REPO` 必须指向同一个地方 —— 不一致的症状是「Release 建出来了，
+# 但没有人收到更新」。
 #
 # 做三件事：
 #   1. 下载构建工作流的产物 artifact（windows-nsis / macos-universal /
@@ -43,20 +42,18 @@ RUN_ID="${2:-}"
 
 # 构建 run 与 Release 所在的仓库（见文件头）。默认值与 `version.rs` 的
 # `DEFAULT_REPO` 一致；换构建仓库时三处一起改。
-BUILD_REPO="${BUILD_REPO:-Agent2Builder/agent2api-releases}"
+BUILD_REPO="${BUILD_REPO:-kuyoos/Agent2API}"
 export BUILD_REPO
 
-# ── 两个仓库、两把凭据 ────────────────────────────────────────
-# 构建仓库属于专用构建账号，源码仓库属于主账号 —— 它们的 Release 各自只能
-# 由**有权限的那一方**创建 / 修改。早先脚本只用一个 `GH_TOKEN`，结果用主账号
-# 的 token 去 edit 构建仓库的 Release，报 `HTTP 404: Not Found`
-# （GitHub 对无权限的仓库回 404 而不是 403，看着像「Release 不存在」）。
+# ── 两把凭据 ──────────────────────────────────────────────────
+# 本 fork 里构建仓库与源码仓库是同一个（`kuyoos/Agent2API`），MIRROR_TO_SOURCE
+# 会因此自动跳过。仍保留两个变量，是为了「临时指到别的构建仓库」这条路径
+# （`BUILD_REPO=Other/repo`）不失效。
 #
-# `BUILD_TOKEN`：对构建仓库有 contents:write 的 token（默认取当前 gh 活动账号）
+# `BUILD_TOKEN`：对构建 / 发布仓库有 contents:write 的 token（默认取当前 gh 活动账号）
 # `SOURCE_TOKEN`：对源码仓库有 contents:write 的 token（同上）
 #
-# 两者都省略时，脚本假定当前 `gh auth` 的账号对两个仓库都有权限 —— 单一账号
-# 管两个仓库的部署（fork、自建）就是这样，不必额外配。
+# 两者都省略时，脚本假定当前 `gh auth` 的账号对两边都有权限。
 BUILD_TOKEN="${BUILD_TOKEN:-${GH_TOKEN:-}}"
 SOURCE_TOKEN="${SOURCE_TOKEN:-${GH_TOKEN:-}}"
 
@@ -105,7 +102,7 @@ if [ -z "$RUN_ID" ]; then
   echo "→ 查找 $TAG 触发的 build 工作流…"
   # 不按 run 整体 conclusion 过滤：只验「两个安装包 artifact 是否齐全」，
   # 构建成功但别处失败的 run 里安装包照旧可用
-  for id in $(GH_TOKEN="$BUILD_TOKEN" gh run list --workflow=release --repo "$BUILD_REPO" --limit 30 --json databaseId,headBranch \
+  for id in $(GH_TOKEN="$BUILD_TOKEN" gh run list --workflow=build --repo "$BUILD_REPO" --limit 30 --json databaseId,headBranch \
       | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>{JSON.parse(s).filter(r=>r.headBranch===process.argv[1]).forEach(r=>process.stdout.write(r.databaseId+"\n"))})' "$TAG"); do
     if GH_TOKEN="$BUILD_TOKEN" gh api "repos/$BUILD_REPO/actions/runs/$id/artifacts" \
          --jq 'any(.artifacts[].name; . == "macos-universal") and any(.artifacts[].name; . == "windows-nsis")' >/dev/null 2>&1; then

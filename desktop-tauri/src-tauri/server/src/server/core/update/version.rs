@@ -16,34 +16,29 @@ use serde_json::Value;
 
 use crate::server::config::UpdateChannels;
 
-/// 默认仓库：安装包实际发布的地方（独立构建账号下的仓库）。
+/// 默认仓库：安装包实际发布的地方（本 fork 自己的 Release）。
 ///
-/// ── 为什么不是主仓库 ────────────────────────────────────────
-/// 构建已搬到专用账号（见 `Agent2Builder/agent2api-releases` 的
-/// `release.yml`）：七个平台 job 跑一次是重负载，留在主仓库做 tag 触发容易
-/// 被判定为 Actions 滥用。因此**主仓库不再发带安装包的 Release** —— 这个
-/// 常量若仍指向主仓库，更新检查会永远「已是最新」（不报错，只是静默失效）。
+/// ── 为什么是本 fork 而不是上游 ──────────────────────────────
+/// 本仓库是 `kuyoos/Agent2API`，构建与发布都在这里跑（见
+/// `.github/workflows/build.yml`）。更新检查如果指向上游构建仓库，用户点
+/// 「检查更新」会被领去装官方版，等于把本 fork 的版本覆盖掉 —— 这正是
+/// fork 必须改掉这个常量的原因。
 ///
-/// ── 这个值是可以被远程改掉的 ────────────────────────────────
-/// 它只是**兜底**。正常情况下实际用的是索引里的 `app.repo`
-/// （见 `core::update::index`）：构建仓库换了，改索引文件即可，不必发版。
-/// 这里保留一个可用值，是为了「索引读不到也还能更新」。
+/// ── 索引不再改写它 ──────────────────────────────────────────
+/// 上游的索引 `app.json` 把仓库指向上游构建账号；`core::update::index`
+/// 现在只接受与本常量一致的 `app.repo`，不一致就整份忽略（含强制更新规则），
+/// 避免官方索引把更新检查悄悄送回上游。
 ///
 /// `WORKBUDDY_UPDATE_REPO` 环境变量仍可覆盖（最高优先级，且不读索引）。
-pub const DEFAULT_REPO: &str = "Agent2Builder/agent2api-releases";
+pub const DEFAULT_REPO: &str = "kuyoos/Agent2API";
 
 /// 项目源码仓库（`owner/repo`）。
 ///
-/// ── 为什么不能复用 [`DEFAULT_REPO`] ──────────────────────────
-/// 界面上的「关于作者 / 收藏项目」两个入口指的是**项目**，不是安装包存放处。
-/// 构建账号（`Agent2Builder`）只是借来跑 Actions 的，它的主页没有代码、
-/// 没有 issue、Star 也没有意义 —— 拿 `repository` 现拼链接会把人领错地方。
-///
-/// 这个值不随索引变：索引回答的是「产物在哪」，这里回答的是「项目在哪」，
-/// 两者只有「换源码仓库」时才需要一起改（换构建仓库不该动它）。
+/// 界面上的「关于作者 / 收藏项目 / 问题反馈」入口指的是**项目**，不是安装包
+/// 存放处。本 fork 的项目地址就是 [`DEFAULT_REPO`] 所在的仓库。
 ///
 /// 网页端 / 手机端拿到的 `sourceRepository` 就是它（见 `build_check_result`）。
-pub const SOURCE_REPO: &str = "aimod-cc/Agent2API";
+pub const SOURCE_REPO: &str = "kuyoos/Agent2API";
 
 /// GitHub API 根（Node 版 GITHUB_API）—— [`api_base`] 的默认值
 pub const GITHUB_API: &str = "https://api.github.com";

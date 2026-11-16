@@ -1,4 +1,13 @@
 //! 应用更新与强制更新共用插件索引仓库的 app.json；只信任官方确认过的策略。
+//!
+//! ── 只接受指向本 fork 的 app.repo ───────────────────────────
+//! 上游索引里的 `app.repo` 指向上游构建仓库。本 fork 若照单全收，更新检查
+//! 会被索引领回官方版 —— 用户装的是 fork 的包，却收到官方安装包。因此
+//! `parse` 要求 `app.repo` 与 [`DEFAULT_REPO`] 逐字一致（忽略首尾空白与
+//! 大小写）；不一致时整份索引作废（含强制更新规则），回落到内置默认值。
+//!
+//! 这样做的代价是：索引里的强制更新规则也只对本 fork 生效。上游要推强制
+//! 更新时，本 fork 需要自己维护一份 app.json 才能同步。
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -49,8 +58,11 @@ impl AppIndex {
 }
 
 pub fn cached() -> AppIndex {
-    task_state::read(TRUSTED_KEY).ok().and_then(|state| state.value)
-        .and_then(|value| serde_json::from_value(value).ok()).unwrap_or_default()
+    let index: Option<AppIndex> = task_state::read(TRUSTED_KEY).ok().and_then(|state| state.value)
+        .and_then(|value| serde_json::from_value(value).ok());
+    // 缓存也要按同一口径判：升级前存下的是**上游**索引，直接沿用会跳过
+    // [`parse`] 的仓库校验，把更新检查送回官方仓库。
+    index.filter(|index| index.repo.trim().eq_ignore_ascii_case(DEFAULT_REPO)).unwrap_or_default()
 }
 
 pub async fn resolve() -> AppIndex {
@@ -70,6 +82,9 @@ fn parse(value: &Value) -> Option<AppIndex> {
     if value.get("schema").and_then(Value::as_u64) != Some(1) { return None; }
     let index: AppIndex = serde_json::from_value(value.get("app")?.clone()).ok()?;
     if !is_repo_slug(&index.repo) { return None; }
+    // 只认本 fork 的仓库（见模块头）：上游索引指向官方构建仓库，照收会把
+    // 更新检查送回上游。
+    if !index.repo.trim().eq_ignore_ascii_case(DEFAULT_REPO) { return None; }
     for rule in [&index.force_update.stable, &index.force_update.beta] {
         if rule.message.chars().count() > 2000 { return None; }
         if let Some(minimum) = rule.minimum_version.as_deref().filter(|value| !value.is_empty()) {

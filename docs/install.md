@@ -131,7 +131,7 @@ journalctl -u agent2api -f
 >
 > 旧安装先下载包含本功能的新版服务端包，在新包目录执行一次 `sudo bash install.sh --upgrade`，补装升级组件后即可使用。自定义服务账号或安装路径不会被脚本强行改写，继续使用原部署方式升级。`AGENT2API_SYSTEMD_UPDATE=0` 可关闭面板入口；停用 `agent2api-updater.socket` 可停用升级组件。`AGENT2API_SELF_UPDATE` 仍为 Docker 专用，不要在裸机开启。
 >
-> 更新组件通过本机 socket 工作，不开放网络端口。默认从官方索引核验发布仓库；需固定仓库或为独立校验配置代理时，管理员可在 `/etc/agent2api/updater.env` 设置 `AGENT2API_UPDATER_REPO=owner/repo` 或 `HTTPS_PROXY`。替换失败会还原；新版启动未确认成功时保留 `/opt/agent2api/.before-update-*` 恢复文件并报告失败，不自动回退数据库。
+> 更新组件通过本机 socket 工作，不开放网络端口。默认核验 `kuyoos/Agent2API` 的发布（不再读上游索引 —— 上游索引指向官方构建仓库，会让更新装成官方版）；需固定其它仓库或为独立校验配置代理时，管理员可在 `/etc/agent2api/updater.env` 设置 `AGENT2API_UPDATER_REPO=owner/repo` 或 `HTTPS_PROXY`。替换失败会还原；新版启动未确认成功时保留 `/opt/agent2api/.before-update-*` 恢复文件并报告失败，不自动回退数据库。
 
 ### 装完之后
 
@@ -209,7 +209,7 @@ services:
 | `AGENT2API_SELF_UPDATE` | 容器内的更新入口：默认 `1` 开启（面板可「下载并更新」）；置 `0` 关闭，只走手动升级 |
 | `AGENT2API_IMAGE_CACHE_MB` | 生成图片的内存下载缓存上限（MiB，默认 `128`，范围 8~4096）。写坏 / 越界回落默认值 |
 | `AGENT2API_IMAGE_COMPRESS_CACHE_MB` | 会话图片压缩结果的内存缓存上限（MiB，默认 `128`，范围 8~4096，口径同上） |
-| `WORKBUDDY_UPDATE_REPO` + `WORKBUDDY_UPDATE_API_BASE` | 进阶：把「检查更新 / 下载更新」换成自建源。前者换仓库（默认跟上游 `aimod-cc/Agent2API`，fork 后可改），后者换 API 根（默认 `https://api.github.com`，需返回与 GitHub 同形的 release JSON）。配了自建源后，下载白名单只额外放行**该源自己的域名**（按源的 scheme：配 `http://` 就允许明文下载，仅建议本地演练/内网镜像用）|
+| `WORKBUDDY_UPDATE_REPO` + `WORKBUDDY_UPDATE_API_BASE` | 进阶：把「检查更新 / 下载更新」换成自建源。前者换仓库（默认 `kuyoos/Agent2API`，即本 fork 的发布仓库），后者换 API 根（默认 `https://api.github.com`，需返回与 GitHub 同形的 release JSON）。配了自建源后，下载白名单只额外放行**该源自己的域名**（按源的 scheme：配 `http://` 就允许明文下载，仅建议本地演练/内网镜像用）|
 
 从源码构建：克隆本仓库后 `docker compose up -d --build`（镜像里只有网关与面板，不含 Rust 工具链）。
 

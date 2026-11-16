@@ -1,4 +1,5 @@
-//! 升级程序自己的信任链：只认安装时指定的仓库或官方索引，不读网关的缓存库。
+//! 升级程序自己的信任链：只认管理员配置的仓库或内置默认仓库，不读网关的缓存库，
+//! 也不跟随上游索引（见 [`fetch`] 里的说明）。
 
 use std::time::Duration;
 
@@ -29,16 +30,16 @@ async fn fetch(tag: &str, token: Option<&str>, repository: Option<&str>) -> Resu
         .redirect(reqwest::redirect::Policy::none())
         .user_agent("agent2api-systemd-updater")
         .build().map_err(|error| UpdateError::new(error.to_string()))?;
+    // 仓库来源：`AGENT2API_UPDATER_REPO` > 内置 `DEFAULT_REPO`（本 fork）。
+    //
+    // ── 为什么不再读官方索引 ────────────────────────────────────
+    // 索引里的 `app.repo` 指向**上游**构建仓库；本 fork 的 Release 不在那里，
+    // 照索引走会去上游找一个本 fork 从未发布过的包（或更糟：装上官方版把
+    // 本 fork 覆盖掉）。升级程序的信任链必须指向真正发布本 fork 产物的仓库，
+    // 这个值只能来自内置常量或管理员显式配置。
     let repository = match repository.filter(|value| !value.trim().is_empty()) {
         Some(value) => value.trim().to_string(),
-        _ => {
-            let index_url = format!("https://raw.githubusercontent.com/{}/main/app.json",
-                crate::server::core::plugin_host::update::INDEX_REPO);
-            let index: Value = serde_json::from_slice(&get(&client, &index_url, None, 64 * 1024).await?)
-                .map_err(|_| UpdateError::new("官方更新索引格式异常"))?;
-            if index["schema"] != 1 { return Err(UpdateError::new("官方更新索引版本不受支持")); }
-            index["app"]["repo"].as_str().ok_or_else(|| UpdateError::new("官方更新索引缺少仓库"))?.to_string()
-        }
+        None => version::DEFAULT_REPO.to_string(),
     };
     if !valid_repo(&repository) { return Err(UpdateError::new("管理员配置的更新仓库无效")); }
     let url = format!("https://api.github.com/repos/{repository}/releases/tags/v{tag}");

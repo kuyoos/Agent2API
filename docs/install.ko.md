@@ -122,7 +122,7 @@ journalctl -u agent2api -f
 >
 > 이전 설치는 이 기능을 포함한 새 서버 패키지를 받아 해당 폴더에서 `sudo bash install.sh --upgrade`를 한 번 실행해 구성 요소를 설치하세요. 사용자 지정 서비스 계정이나 경로는 덮어쓰지 않으므로 기존 배포 절차를 사용하세요. `AGENT2API_SYSTEMD_UPDATE=0`으로 패널 기능을 끄거나 `agent2api-updater.socket`을 비활성화해 업데이트 구성 요소를 끌 수 있습니다. `AGENT2API_SELF_UPDATE`는 여전히 Docker 전용입니다.
 >
-> 업데이트 프로그램은 로컬 socket을 사용하며 네트워크 포트를 열지 않습니다. 기본적으로 공식 인덱스로 릴리스 저장소를 검증합니다. 관리자는 `/etc/agent2api/updater.env`에 `AGENT2API_UPDATER_REPO=owner/repo` 또는 `HTTPS_PROXY`를 설정해 저장소를 고정하거나 독립 검증용 프록시를 지정할 수 있습니다. 교체 실패 시 이전 파일을 복구합니다. 새 서비스 시작을 확인하지 못하면 `/opt/agent2api/.before-update-*`에 복구 파일을 남기고 실패를 알리며 데이터베이스를 자동으로 되돌리지 않습니다.
+> 업데이트 프로그램은 로컬 socket을 사용하며 네트워크 포트를 열지 않습니다. 기본적으로 `kuyoos/Agent2API`의 릴리스를 검증하며 업스트림 인덱스는 더 이상 신뢰하지 않습니다(그 인덱스는 공식 빌드 저장소를 가리키므로 업데이트가 공식 버전으로 설치됩니다). 관리자는 `/etc/agent2api/updater.env`에 `AGENT2API_UPDATER_REPO=owner/repo` 또는 `HTTPS_PROXY`를 설정해 다른 저장소를 고정하거나 독립 검증용 프록시를 지정할 수 있습니다. 교체 실패 시 이전 파일을 복구합니다. 새 서비스 시작을 확인하지 못하면 `/opt/agent2api/.before-update-*`에 복구 파일을 남기고 실패를 알리며 데이터베이스를 자동으로 되돌리지 않습니다.
 
 ### 설치 후
 
@@ -195,7 +195,7 @@ services:
 | `AGENT2API_SELF_UPDATE` | 컨테이너 안의 업데이트 창구: 기본 `1`(켜짐. 패널에서 "다운로드 후 업데이트" 가능). `0`이면 꺼지고 수동 업그레이드만 가능 |
 | `AGENT2API_IMAGE_CACHE_MB` | 생성 이미지의 다운로드 메모리 캐시 상한(MiB, 기본 `128`, 범위 8~4096). 잘못된 값 / 범위 밖은 기본값으로 폴백 |
 | `AGENT2API_IMAGE_COMPRESS_CACHE_MB` | 세션 이미지 압축 결과의 메모리 캐시 상한(MiB, 기본 `128`, 범위 8~4096, 기준 동일) |
-| `WORKBUDDY_UPDATE_REPO` + `WORKBUDDY_UPDATE_API_BASE` | 심화: "업데이트 확인 / 업데이트 다운로드"를 자체 소스로 교체합니다. 전자는 저장소를 바꾸고(기본값은 업스트림 `aimod-cc/Agent2API`, fork 후 변경 가능), 후자는 API 루트를 바꿉니다(기본 `https://api.github.com`, GitHub와 같은 형태의 release JSON을 반환해야 함). 자체 소스 설정 후 다운로드 허용 목록은 **그 소스 자신의 호스트**만 추가로 허용합니다(스킴은 소스를 따름: `http://`를 설정하면 평문 다운로드도 허용. 로컬 연습 / 내부 미러용) |
+| `WORKBUDDY_UPDATE_REPO` + `WORKBUDDY_UPDATE_API_BASE` | 심화: "업데이트 확인 / 업데이트 다운로드"를 자체 소스로 교체합니다. 전자는 저장소를 바꾸고(기본값은 이 fork의 릴리스 저장소 `kuyoos/Agent2API`), 후자는 API 루트를 바꿉니다(기본 `https://api.github.com`, GitHub와 같은 형태의 release JSON을 반환해야 함). 자체 소스 설정 후 다운로드 허용 목록은 **그 소스 자신의 호스트**만 추가로 허용합니다(스킴은 소스를 따름: `http://`를 설정하면 평문 다운로드도 허용. 로컬 연습 / 내부 미러용) |
 
 소스에서 빌드하려면: 이 저장소를 클론한 뒤 `docker compose up -d --build`(이미지에는 게이트웨이와 패널만 들어가며 Rust 도구 체인은 포함되지 않습니다).
 

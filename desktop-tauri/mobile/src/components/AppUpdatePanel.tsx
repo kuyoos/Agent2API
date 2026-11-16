@@ -224,7 +224,7 @@ export function AppUpdatePanel() {
    * （安装包实际存放处）不是项目地址，不能拿来当兜底。
    */
   const openReleasePage = () => {
-    const target = info?.pageUrl || 'https://github.com/aimod-cc/Agent2API/releases'
+    const target = info?.pageUrl || 'https://github.com/kuyoos/Agent2API/releases'
     openExternal(target)
   }
 

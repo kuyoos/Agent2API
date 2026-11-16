@@ -504,10 +504,10 @@ function SystemInfoPanel() {
           <div className='mt-3 flex flex-wrap items-center gap-2 text-[12px] text-subtle'>
             <span>{app.copyright || 'Copyright (c) 2026 Agent2API'}</span>
             <Button variant='outline' size='xs' onClick={() => void openExternal(
-              app.licenseUrl || 'https://github.com/aimod-cc/Agent2API/blob/main/LICENSE',
+              app.licenseUrl || 'https://github.com/kuyoos/Agent2API/blob/main/LICENSE',
             )}>AGPL-3.0</Button>
             <Button variant='outline' size='xs' onClick={() => void openExternal(
-              app.sourceUrl || 'https://github.com/aimod-cc/Agent2API',
+              app.sourceUrl || 'https://github.com/kuyoos/Agent2API',
             )}>{t('源代码')}</Button>
           </div>
           <p className='mt-1.5 text-[12px] text-subtle'>

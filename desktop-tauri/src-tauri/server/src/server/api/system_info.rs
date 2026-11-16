@@ -121,8 +121,8 @@ pub async fn get_system_info(
             // 其余形态这就是唯一真值（与 `/api/update/check` 的缺省口径一致）
             "version": CURRENT_VERSION,
             "license": "AGPL-3.0-only",
-            "sourceUrl": "https://github.com/aimod-cc/Agent2API",
-            "licenseUrl": "https://github.com/aimod-cc/Agent2API/blob/main/LICENSE",
+            "sourceUrl": "https://github.com/kuyoos/Agent2API",
+            "licenseUrl": "https://github.com/kuyoos/Agent2API/blob/main/LICENSE",
             "copyright": "Copyright (c) 2026 Agent2API",
             "channel": config::update_channels().key(),
             "schemaVersion": db::schema::SCHEMA_VERSION,
