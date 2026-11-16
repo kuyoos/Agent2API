@@ -26,7 +26,7 @@ Releases ship the artifacts below; pick the row that matches your machine:
 | **macOS / Linux desktop** (build yourself) | `_universal.dmg` / `_amd64.deb` / `_amd64.AppImage` from source | App window | This fork's releases **ship Windows desktop plus the server packages only**; macOS / Linux desktop builds are not published, compile them per the "Development and build" section of the README |
 | **Windows server** (no GUI) | `agent2api-server-windows-amd64.zip` | **Browser panel** | Command-line install, registered as a Windows service — see [Server](#server-windows--linux-headless) |
 | **Linux server** (no GUI) | `agent2api-server-linux-<arch>.tar.gz` | **Browser panel** | Command-line install, run under systemd; the same package is also the in-container update payload |
-| **Docker** | `aimodcc/agent2api:latest` | **Browser panel** | amd64 / arm64 images — see [Docker](#docker) |
+| **Docker** | `ghcr.io/kuyoos/agent2api:latest` | **Browser panel** | amd64 / arm64 images — see [Docker](#docker) |
 
 > Which one: **you have a desktop** (want the tray, launch-at-login, local login-state import) → the desktop app;
 > **the server has no graphical interface** (Windows Server / a Linux box) → the server package;
@@ -156,12 +156,14 @@ On Linux put them in `/etc/agent2api/agent2api.env`; on Windows edit the service
 
 ## Docker
 
-Image tags: `latest` follows the latest stable release, while `beta` follows the latest beta prerelease. Use a full version such as `3.3.0-beta.3` to pin a version. To use beta, replace `aimodcc/agent2api:latest` with `aimodcc/agent2api:beta` in the command or Compose configuration below; update with `docker compose pull && docker compose up -d`. Beta releases never move `latest`, and manual development builds only update `dev`. The same image is also published to the GitHub Container Registry: replace the image name with `ghcr.io/aimod-cc/agent2api` (the tag rules are identical).
+Images are published to the GitHub Container Registry as `ghcr.io/kuyoos/agent2api`: pushing a stable `v*` tag yields `<version>` and `latest`; a beta tag yields `<version>` and a rolling `beta` and **never moves `latest`**; manually triggered builds only update `dev`. Use a full version such as `3.5.1` to pin. To use beta, change `:latest` to `:beta` in the command or Compose configuration below; update with `docker compose pull && docker compose up -d`.
+
+> The upstream `aimodcc/agent2api` carries **no build of this fork** (it stops at upstream 3.5.0-beta.1) — don't mix them. New GHCR packages are **private by default**; if `docker pull` returns 401, switch the package to Public on the package settings page.
 
 ```bash
 docker run -d --name agent2api --restart unless-stopped \
   -p 3065:3065 -v ./data:/data \
-  aimodcc/agent2api:latest
+  ghcr.io/kuyoos/agent2api:latest
 ```
 
 Open `http://<host>:3065` in a browser — the first visit walks you through **registering the admin account**; log in and create an API key in the "Gateway Keys" page for your clients — `http://<host>:3065/v1` is the OpenAI-compatible endpoint (it refuses to forward until the first key exists). All state (SQLite database / config / logs) lives in the `./data` volume.
@@ -171,7 +173,7 @@ Compose users (images are published for amd64 and arm64):
 ```yaml
 services:
   agent2api:
-    image: aimodcc/agent2api:latest
+    image: ghcr.io/kuyoos/agent2api:latest
     container_name: agent2api
     restart: unless-stopped
     ports:
@@ -206,7 +208,7 @@ On small machines, cap the container's memory: when it goes over, the kernel kil
 # docker run
 docker run -d --name agent2api --restart unless-stopped --memory=1g \
   -p 3065:3065 -v ./data:/data \
-  aimodcc/agent2api:latest
+  ghcr.io/kuyoos/agent2api:latest
 ```
 
 For compose, add `mem_limit: 1g` to the service (a commented example is in `docker-compose.yml`); on swarm or `docker compose --compatibility`, use `deploy.resources.limits.memory`. Treat 1g as a starting point and tune it to your concurrency.

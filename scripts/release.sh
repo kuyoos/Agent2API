@@ -261,7 +261,7 @@ if [ "$PRERELEASE" = true ]; then
   echo "      ↑ beta 版：Release 应显示 Prerelease —— 正式版用户收不到它，"
   echo "        只有开了「加入 beta 版」的用户收得到（见 .agents/skills/release-flow/SKILL.md 第 6 节）"
 else
-  echo "  [2] Docker Hub:      https://hub.docker.com/r/aimodcc/agent2api/tags （$TAG 版本号 + latest）"
+  echo "  [2] GHCR:            ghcr.io/kuyoos/agent2api（$TAG 版本号 + latest；首次推送后需把包改成 Public）"
 fi
 echo "  [3] Windows 安装包「关于」页版本号与 $TAG 一致"
 echo "  [4] 容器内更新：面板「设置 → 软件更新」出现「下载并更新」，且 Release 里"
@@ -271,5 +271,5 @@ echo "      两个平台的包解包后都应看到安装脚本 —— Linux: in
 echo "      / agent2api.env.example；Windows: install-service.ps1"
 echo "  [6] 附件总数应为 7（Windows exe + linux-server 两份包各带 .sha256 + windows-server zip 与 .sha256）"
 if [ "$PRERELEASE" = true ]; then
-  echo "  [9] Docker 镜像：只出 $TAG 那个版本 tag（beta tag 不移动 :latest）"
+  echo "  [9] GHCR 镜像：只出 $TAG 那个版本 tag 与滚动 :beta（beta tag 不移动 :latest）"
 fi

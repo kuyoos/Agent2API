@@ -26,7 +26,7 @@ Escolha a linha que corresponde à sua máquina:
 | **Desktop macOS / Linux** (compile você mesmo) | `_universal.dmg` / `_amd64.deb` / `_amd64.AppImage` compilados do código-fonte | Janela do app | Os releases deste fork **trazem apenas o desktop Windows e os pacotes de servidor**; as versões desktop de macOS / Linux não são publicadas — compile seguindo a seção "Desenvolvimento e build" do README |
 | **Servidor Windows** (sem GUI) | `agent2api-server-windows-amd64.zip` | **Painel no navegador** | Instalação por linha de comando, registrado como serviço do Windows — veja [Servidor](#servidor-windows--linux-sem-interface) |
 | **Servidor Linux** (sem GUI) | `agent2api-server-linux-<arch>.tar.gz` | **Painel no navegador** | Instalação por linha de comando, sob systemd; o mesmo pacote também é o payload da atualização dentro do contêiner |
-| **Docker** | `aimodcc/agent2api:latest` | **Painel no navegador** | Imagens amd64 / arm64, veja [Implantação com Docker](#docker) |
+| **Docker** | `ghcr.io/kuyoos/agent2api:latest` | **Painel no navegador** | Imagens amd64 / arm64, veja [Implantação com Docker](#docker) |
 
 > Qual escolher: **você tem um desktop** (quer bandeja, iniciar com o sistema, importar o estado de login local) → app de desktop;
 > **o servidor não tem interface gráfica** (Windows Server / servidor Linux) → o pacote de servidor;
@@ -156,12 +156,14 @@ No Linux coloque-as em `/etc/agent2api/agent2api.env`; no Windows edite a chave 
 
 ## Docker
 
-Tags da imagem: `latest` acompanha a versão estável mais recente, enquanto `beta` acompanha a pré-versão beta mais recente. Use uma versão completa, como `3.3.0-beta.3`, para fixá-la. Para usar beta, troque `aimodcc/agent2api:latest` por `aimodcc/agent2api:beta` no comando ou na configuração do Compose abaixo; atualize com `docker compose pull && docker compose up -d`. Versões beta não alteram `latest`, e builds manuais de desenvolvimento atualizam apenas `dev`. A mesma imagem também é publicada no GitHub Container Registry: troque o nome da imagem por `ghcr.io/aimod-cc/agent2api` (as regras de tag são idênticas).
+As imagens são publicadas no GitHub Container Registry como `ghcr.io/kuyoos/agent2api`: um tag estável `v*` produz `<versão>` e `latest`; um tag beta produz `<versão>` e `beta` rolante e **nunca move `latest`**; builds acionados manualmente atualizam apenas `dev`. Use uma versão completa, como `3.5.1`, para fixá-la. Para usar beta, troque `:latest` por `:beta` no comando ou na configuração do Compose abaixo; atualize com `docker compose pull && docker compose up -d`.
+
+> O `aimodcc/agent2api` do upstream **não tem build deste fork** (para no upstream 3.5.0-beta.1) — não misture. Pacotes novos no GHCR são **privados por padrão**; se `docker pull` retornar 401, mude o pacote para Public na página de Packages do repositório.
 
 ```bash
 docker run -d --name agent2api --restart unless-stopped \
   -p 3065:3065 -v ./data:/data \
-  aimodcc/agent2api:latest
+  ghcr.io/kuyoos/agent2api:latest
 ```
 
 Abra `http://<host>:3065` no navegador: a primeira visita guia o **cadastro do administrador**; depois de entrar, crie uma API key na página "Gateway Keys" para os clientes — `http://<host>:3065/v1` é o endpoint compatível com OpenAI (sem nenhuma chave ele recusa o encaminhamento). Todo o estado (banco SQLite / configuração / logs) fica em um único volume `./data`.
@@ -171,7 +173,7 @@ Para quem usa compose (há imagens amd64 e arm64):
 ```yaml
 services:
   agent2api:
-    image: aimodcc/agent2api:latest
+    image: ghcr.io/kuyoos/agent2api:latest
     container_name: agent2api
     restart: unless-stopped
     ports:
@@ -206,7 +208,7 @@ Em máquinas com pouca memória, vale limitar a memória do contêiner: ao ultra
 # docker run
 docker run -d --name agent2api --restart unless-stopped --memory=1g \
   -p 3065:3065 -v ./data:/data \
-  aimodcc/agent2api:latest
+  ghcr.io/kuyoos/agent2api:latest
 ```
 
 No compose, adicione `mem_limit: 1g` ao serviço (há um exemplo comentado no `docker-compose.yml`); em swarm ou `docker compose --compatibility`, use `deploy.resources.limits.memory`. Encare o 1g como ponto de partida e ajuste à sua concorrência.

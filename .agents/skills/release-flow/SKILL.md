@@ -18,13 +18,13 @@ description: Agent2API（workbuddy）仓库的协作与发版规范 —— 分�
 
 ## 0.5 三个仓库的分工（2026-10 起）
 
-构建不再在主仓库跑。发版涉及三个仓库，各管一段，弄混了就会出现「tag 推上去了，但没人收到更新」这类静默故障。
+**本 fork 已改回在源码仓库自己构建**（上游那套「派发到独立构建账号」没有对应令牌，照搬会导致推 tag 什么都不出）。下面是上游三仓库体系的说明，本 fork 只在需要注册表 / 索引时才涉及后两个：
 
 | 仓库 | 角色 | 里面有什么 |
 |---|---|---|
-| `aimod-cc/Agent2API` | **源码仓库**（就是当前仓库） | 代码、文档、`build.yml`（只做派发，不编译）。推 `v*` tag 只跑一个十几秒的 job |
-| `Agent2Builder/agent2api-releases` | **构建仓库**（专用账号下） | `release.yml` 构建安装包，`publish-installers.yml` 发布并同步源码仓库，`docker.yml` 发布双架构镜像。**所有签名密钥只在这里** |
-| `Agent2plugin/Agent2plugin` | **索引仓库** | `index.json`（插件包在哪）与 `app.json`（桌面端安装包在哪）。换构建仓库改这里，不必发版 |
+| `kuyoos/Agent2API` | **源码仓库**（就是当前仓库） | 代码、文档、`build.yml`（构建安装包 + 发布 Release）与 `docker.yml`（构建镜像推 GHCR）。推 `v*` tag 时两个工作流并行跑 |
+| `Agent2Builder/agent2api-releases` | 上游的**构建仓库**（本 fork 不使用） | 上游在此构建并发布。本 fork 的 tag 不会再派发到这里 |
+| `Agent2plugin/Agent2plugin` | **索引仓库** | `index.json`（插件包在哪）与 `app.json`（桌面端安装包在哪）。插件构建仓库仍走这套 |
 
 ### 为什么这么分
 
@@ -32,17 +32,15 @@ description: Agent2API（workbuddy）仓库的协作与发版规范 —— 分�
 
 ### 一次 tag 的完整链路
 
+本 fork 的链路（源码仓库自己构建，不再派发）：
+
 ```
 git push origin vX.Y.Z
-  └─ 源码仓库 build.yml（dispatch job，约 10 秒）
-       └─ repository_dispatch → Agent2Builder/agent2api-releases
-            ├─ release.yml  各平台构建 → publish-installers.yml
-            │    ├─ 发布安装包 → 构建仓库 Release
-            │    └─ 同步主仓库 → 相同附件与日志
-            └─ docker.yml   双架构镜像 → Docker Hub 与 GHCR
+  └─ 源码仓库 build.yml  （windows / linux-server ×2 / windows-server → publish）
+  └─ 源码仓库 docker.yml （image：amd64 + arm64 → GHCR，配了凭据再推 Docker Hub）
 ```
 
-`release.yml` 与 `docker.yml` 都监听 `repository_dispatch` 的 `release` 事件，所以一条派发同时起两边。
+两个工作流都监听 `refs/tags/v*`，所以一次 `git push` tag 会同时起两边；`docker.yml` 手动触发只出 `:dev`。
 
 ### 换构建仓库（构建账号被封 / 要迁移时）
 
@@ -148,16 +146,17 @@ cargo check
 git commit -am "…更新日志…"
 
 # 5. 推 main、打 tag、推 tag
-#    推 tag 只会在**源码仓库**跑一个十几秒的派发 job，真正的构建在
-#    Agent2Builder/agent2api-releases 里跑（见 0.5 节）
+#    推 tag 会在**本仓库**同时起 build.yml（安装包 + Release）与
+#    docker.yml（镜像 → GHCR），见 0.5 节
 git push origin main
 git tag vX.Y.Z
 git push origin vX.Y.Z
 
-# 6. 到**构建仓库**看进度（不是本仓库）
-gh run list --repo Agent2Builder/agent2api-releases --limit 4
+# 6. 在本仓库看进度
+gh run list --repo kuyoos/Agent2API --limit 6
+gh run watch <run-id> --repo kuyoos/Agent2API --exit-status
 
-# 7. 构建完成后由工作流发布安装包并同步源码仓库，检查两个收尾任务
+# 7. build.yml 的 publish job 自己建 Release 并逐个上传七份附件
 #    本地 scripts/release.sh 只在自动流程不可用或旧版本补发时使用
 ```
 
@@ -168,37 +167,28 @@ gh run list --repo Agent2Builder/agent2api-releases --limit 4
 - 本次没有代码改动时用空提交承载：`git commit --allow-empty -F 更新日志.txt`；
 - 更新日志草稿与历史发布说明统一写在 `docs/release-notes/<版本号>.md`（如 `docs/release-notes/2.9.2.md`），不要在项目根目录新建 `.release-notes-*.md` —— `docs/release-notes/` 已在忽略列表里（只忽略这个目录，`docs/` 下其它文档正常入库），新增文件不必再加忽略规则。
 
-推 `v*` tag 后，**源码仓库**只跑 `build.yml` 的 `dispatch` job（约 10 秒）；它向构建仓库派发，**构建仓库**里的两个工作流同时开跑：
+推 `v*` tag 后，**源码仓库**里两个工作流并行开跑：
 
-| 工作流（跑在构建仓库） | 产出 | 说明 |
+| 工作流（跑在 `kuyoos/Agent2API`） | 产出 | 说明 |
 |---|---|---|
-| `release.yml` → `publish-installers.yml` | 桌面端与服务端构建产物 | 构建任务为 `windows`、`linux-server`（amd64 / arm64）、`windows-server`。三个任务全部成功后，`publish-installers.yml` 由**完成事件自动触发**（`workflow_run`）：校验七份附件并发布，再同步一份到源码仓库。**本 fork 不出 macOS dmg 与 Linux 桌面端 deb / AppImage**。插件仍由独立插件构建仓库发布 |
-| `docker.yml` | Docker Hub `aimodcc/agent2api:<版本>` 与 GHCR `ghcr.io/aimod-cc/agent2api:<版本>`，amd64 / arm64 双架构 | 正式版发布 `<版本>` + `:latest`；beta 预发布发布 `<版本>` + 滚动 `:beta`，**不移动 `:latest`**；手动 `workflow_dispatch` 且不填 ref 时只出 `:dev`，不移动 `:beta` 或 `:latest`。两个仓库推的是同一份清单 |
+| `build.yml` | 桌面端与服务端构建产物 | 构建任务为 `windows`、`linux-server`（amd64 / arm64）、`windows-server`；三个任务全绿后由 `publish` job 校验七份附件并**建 Release 上传**。**本 fork 不出 macOS dmg 与 Linux 桌面端 deb / AppImage**。插件仍由独立插件构建仓库发布 |
+| `docker.yml` | GHCR `ghcr.io/kuyoos/agent2api:<版本>`（配了 Docker Hub 凭据时同推一份），amd64 / arm64 双架构 | 正式版发布 `<版本>` + `:latest`；beta 预发布发布 `<版本>` + 滚动 `:beta`，**不移动 `:latest`**；手动 `workflow_dispatch` 只出 `:dev`。两个 registry 推的是同一份清单 |
 
-**源码仓库的 `build.yml` 只做派发，`docker.yml` 已整体删除** —— 镜像构建现在只在构建仓库里跑（源码仓库保留那份只会让人误以为它还在工作）。
+GHCR 用内置 `GITHUB_TOKEN`，**不需要任何 secret**；Docker Hub 只在配了 `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` 时才推。两者都不用 `setup-qemu`：Dockerfile 的 builder 跑在 `$BUILDPLATFORM`，arm64 靠 aarch64 工具链交叉编译。
 
 跟踪进度：
 
 ```bash
-gh run list --repo Agent2Builder/agent2api-releases --limit 4
-gh run watch <run-id> --repo Agent2Builder/agent2api-releases --exit-status
+gh run list --repo kuyoos/Agent2API --limit 6
+gh run watch <run-id> --repo kuyoos/Agent2API --exit-status
 ```
 
-**自动收尾**由构建仓库的 `publish-installers.yml` 完成，它监听 `release.yml` 的完成事件（`workflow_run`），只有一个 job、顺序做两步：
+**自动收尾**由 `build.yml` 的 `publish` job 完成（`needs: [windows, linux-server, windows-server]`，仅 tag 触发）：
 
-- **发布到本仓库**：按那次构建 run 取产物清点（**恰好七份**；Windows 包名里的版本号必须与 tag 一致；服务端包的 sha256 与包本身对得上，容错 Windows 侧生成的 CRLF 行尾），先建草稿 Release、**逐个**上传、七份齐了才公开；beta 自动标预发布。**桌面端的更新检查读的就是这一份。**
-- **镜像到源码仓库**：同一份附件与逐字相同的正文，用 `SOURCE_RELEASE_TOKEN` 建 / 改 `aimod-cc/Agent2API` 的 Release。缺这个 token 或网络失败时这一步明确失败，本仓库已发布的 Release 保留、用户更新不受影响。
-- **为什么发布与构建分成两个工作流**：发布出错只需要重跑 `publish-installers.yml`（几十秒、不重新编译），不会被迫把三个平台再建一遍 —— tag 是发版动作、频率不可控，重跑构建最坏会被判成 Actions 滥用。重跑用 `only` 挑步骤，按 run 号补发就传 `run_id`：
-
-  ```bash
-  # 补发 / 重跑（不填 run_id 时用触发本工作流的那次构建）
-  gh workflow run publish-installers.yml --repo Agent2Builder/agent2api-releases -f run_id=<run-id>
-  # 只重做镜像那一步
-  gh workflow run publish-installers.yml --repo Agent2Builder/agent2api-releases -f run_id=<run-id> -f only=mirror
-  ```
-
-- **自动发布只认 `repository_dispatch` 触发的构建**（也就是 tag 发版）。手动触发的构建不会自动发布，免得把分支快照发出去；要发就手动传 `run_id`。
-- 上传是**同名覆盖**（逐个 `--clobber`）：gh 批量上传遇到「附件已存在」会报 HTTP 422 并中断整批，症状是 Release 建好了附件少一半（2026-10-17 实测）。所以重跑天然幂等，只补缺的那几个。
+- **清点附件**（**恰好七份**），少一份就 `::error::` 退出；Windows 包名里的版本号必须与 tag 一致；
+- **建 Release 并逐个上传**：`gh release view` 存在则 `edit` 正文，否则 `create`；正文 = tag 所指提交的完整提交信息；beta tag 自动加 `--prerelease`。**桌面端的更新检查读的就是这一份。**
+- 上传是**同名覆盖**（逐个 `--clobber`）：gh 批量上传遇到「附件已存在」会报 HTTP 422 并中断整批（2026-10-17 实测），所以逐个传、天然幂等。
+- **重跑收尾不必重新编译**：在 Actions 页对那次 run 点 `Re-run failed jobs`，只会重跑失败的 job；`publish` 单独重跑会在几十秒内完成。
 
 本地 `scripts/release.sh` 保留为**应急入口**，只用于旧版本或自动流程不可用时：
 
@@ -208,9 +198,9 @@ bash scripts/release.sh vX.Y.Z <run-id>
 
 脚本会清空当前目录的 `dist/`；使用前必须检查并保护已有产物，建议在独立工作区运行。
 
-- 目标仓库由脚本里的 `BUILD_REPO` 决定，默认 `Agent2Builder/agent2api-releases`；临时换目标用环境变量：`BUILD_REPO=Other/repo bash scripts/release.sh vX.Y.Z`。
-- 脚本找的是构建仓库里名为 **`release`** 的工作流（不是 `build`）。源码仓库那个 `build.yml` 只做派发，没有产物可下。
-- **更新日志仍从源码仓库取**（`git log -1 --format=%B "$TAG"`），所以脚本要在源码仓库目录里跑。
+- 目标仓库由脚本里的 `BUILD_REPO` 决定（默认就是本仓库 `kuyoos/Agent2API`）；临时换目标用环境变量：`BUILD_REPO=Other/repo bash scripts/release.sh vX.Y.Z`。
+- 脚本找的是名为 **`build`** 的工作流的那次 run，按 `run-id` 下载 `windows-nsis` / `linux-server-*` / `windows-server-amd64` 三组产物。
+- **更新日志从 tag 所指提交取**（`git log -1 --format=%B "$TAG"`），所以脚本要在源码仓库目录里跑。
 
 ### 工作流的跨仓库凭据
 
@@ -285,7 +275,7 @@ gh run list --repo Agent2Builder/agent2api-releases --limit 4
 2. **Release 漏标 pre-release**：标记就是开关的分界线，正式通道排除预发布。自动发布根据 semver 预发布后缀判定；应急脚本也会设置。若已有公开版本的标记不一致，自动流程明确失败，不擅自改写。
 3. **tag 打在 `main` 上**：beta 是集成分支，beta 版要的是它的快照。打在 `main` 上要么不含 beta 分支的新改动（白测一场），要么等于把还没发布的改动提前推进 `main`。
 
-构建仓库 `.github/workflows/docker.yml` 发布 beta 时同时产出完整版本标签（如 `3.3.0-beta.3`）与滚动 `:beta`，**不移动 `:latest`**。Docker 用户用 `aimodcc/agent2api:beta` 跟随 beta，或用完整版本号固定版本；手动 dev 构建不会移动 `:beta`。
+`docker.yml` 发布 beta 时同时产出完整版本标签（如 `3.5.0-beta.1`）与滚动 `:beta`，**不移动 `:latest`**。Docker 用户用 `ghcr.io/kuyoos/agent2api:beta` 跟随 beta，或用完整版本号固定版本；手动 dev 构建不会移动 `:beta`。
 
 后续常见三件事：
 
@@ -297,11 +287,11 @@ gh run list --repo Agent2Builder/agent2api-releases --limit 4
 
 以下 `gh` 命令都带 `--repo Agent2Builder/agent2api-releases` —— Release 与构建 run 都在构建仓库，不带这个参数会去查源码仓库然后什么都找不到（手动跑 gh 前先设代理，见第 8 节）。
 
-- [ ] **构建仓库的 run 全绿**：`gh run list --repo kuyoos/Agent2API --limit 4` —— 应看到 `build` 与 `docker` 两个 run，前者四个 job 全绿（`verify` / `windows` / `linux-server` ×2 架构 / `windows-server` / `publish`）；
+- [ ] **构建 run 全绿**：`gh run list --repo kuyoos/Agent2API --limit 4` —— 应看到 `build` 与 `docker` 两个 run；前者的 `windows` / `linux-server` ×2 架构 / `windows-server` / `publish` 全绿，后者的 `image` 绿且 job 日志末尾有两条镜像清单（amd64 / arm64）；
 - [ ] GitHub Release：`gh release view vX.Y.Z --repo kuyoos/Agent2API` —— 正文日志齐全，附件共 **7 份**：Windows `Agent2API_<版本>_x64-setup.exe`、两个 `agent2api-server-linux-*.tar.gz` + 各自 `.sha256`（容器内更新包，见第 5 节）、`agent2api-server-windows-amd64.zip` + `.sha256`；
 - [ ] **手机端包不在 Release 里**：APK / IPA 不在本 fork 的构建范围内；若要恢复必须先获用户确认，并同步修改工作流与安装文档。
 - [ ] **插件包**：在独立插件构建仓库的对应 Release 中检查五个平台包及官方签名，不计入主程序附件。
-- [ ] Docker Hub：`aimodcc/agent2api` 的 Tags 页出现 `<版本>` 与 `latest`，Pushed 时间一致；GHCR：`ghcr.io/aimod-cc/agent2api:<版本>` 可拉（**新包默认私有**，首次要去包设置改 Public）；
+- [ ] GHCR：`ghcr.io/kuyoos/agent2api:<版本>` 与 `:latest` 可拉，digest 与 `:dev` 那次构建的清单一致（**新包默认私有**，首次要去包设置改 Public）；配了 Docker Hub 凭据时再查 `aimodcc/agent2api` 的 Tags 页；
 - [ ] **更新检查真的能查到**（这条最容易漏）：`gh release view vX.Y.Z --repo Agent2Builder/agent2api-releases` 有内容，且索引仓库的 `app.json` 里 `app.repo` 指向同一个仓库。两者对不上时，用户面板会显示「已是最新」；
 - [ ] 安装包「关于」页版本号与 tag 一致；
 - [ ] 安装文档对得上实际产物：`docs/install.md` 与 5 份译文的产物名、端口、命令、环境变量跟这次 Release 一致（README 里那几张速查表同理）；
@@ -318,8 +308,8 @@ gh run list --repo Agent2Builder/agent2api-releases --limit 4
 | `AGENT2API_PLUGIN_KEY` | 构建仓库 | 插件包 ed25519 签名私钥 | 产物未签名，网关安装时标黄 |
 | `ANDROID_KEYSTORE_BASE64` / `ANDROID_KEYSTORE_PASSWORD` / `ANDROID_KEY_ALIAS` / `ANDROID_KEY_PASSWORD` | 构建仓库 | APK 签名 | `android` job 直接红 |
 | `IOS_CERTIFICATE_BASE64` / `IOS_CERTIFICATE_PASSWORD` / `IOS_PROVISIONING_PROFILE` / `IOS_TEAM_ID` | 构建仓库 | iOS 签名 | 产出未签名 IPA（可 AltStore 重签），不报错 |
-| `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` | 构建仓库 | 推 Docker Hub | 镜像工作流明确失败 |
-| `GHCR_TOKEN` | 构建仓库 | 推 GHCR。**必须是 aimod-cc 账号**、仅 `write:packages` 的 classic PAT（内置 `GITHUB_TOKEN` 只认构建账号自己的命名空间，跨账号会被拒） | 镜像工作流明确失败 |
+| `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` | **源码仓库** | 可选，推 Docker Hub | 不配就整步跳过（只推 GHCR），不报错 |
+| GHCR | — | **不需要 secret**：`docker.yml` 用内置 `GITHUB_TOKEN` + 顶层 `packages: write` | — |
 | `SOURCE_RELEASE_TOKEN` | **构建仓库** | 同步主仓库 Release，限定源码仓库 Contents: write | `mirror` 明确失败，可单独重跑 |
 | `BUILDER_DISPATCH_TOKEN` | **源码仓库** | 向构建仓库派发 `repository_dispatch` | tag 推上去后什么都不会发生 |
 
@@ -330,8 +320,10 @@ gh run list --repo Agent2Builder/agent2api-releases --limit 4
 ### 8.2 镜像与 GHCR
 
 - **GHCR 新包默认私有**：首次推送后需到包设置手动改 Public，否则别人 `docker pull` 会 401（API 改不了这个默认值）。
-- **镜像名不能用 `${GITHUB_REPOSITORY}`**：工作流跑在构建仓库里，那个变量会解析成构建仓库的名字，镜像就推到构建账号的命名空间下去了。`docker.yml` 用 `GHCR_OWNER` / `GHCR_IMAGE` 两个 env 显式指定，换主仓库时连同 `SOURCE_URL`（`org.opencontainers.image.source` 的覆盖值）一起改这三处。
-- **包要关联主仓库**：`metadata-action` 默认把 `org.opencontainers.image.source` 填成「工作流所在仓库」（= 构建仓库），跨账号连不上。`docker.yml` 在 `labels:` 里显式重写为主仓库地址，这样 GHCR 的包页面才会指回 `aimod-cc/Agent2API`。
+- **镜像名写死在 `GHCR_IMAGE` env 里**（`ghcr.io/kuyoos/agent2api`）：`$GITHUB_REPOSITORY` 带大小写（`kuyoos/Agent2API`），而镜像名必须全小写；仓库改名时改这一处 + `labels:` 里的 source 地址即可。
+- **包要关联主仓库**：`metadata-action` 默认把 `org.opencontainers.image.source` 填成「工作流所在仓库」。`docker.yml` 在 `labels:` 里显式重写为 `https://github.com/kuyoos/Agent2API`，这样 GHCR 的包页面才会指回源码仓库。
+- **服务器拉不动 GHCR 时**（实测这台阿里云：`ghcr.io` 直连的 blob 只有 10–30 KB/s，~120MB 镜像要拉几十分钟）：`registry-mirrors` 只代 Docker Hub，GHCR 仍直连，改加速器没用。
+- **GHCR 代理在 `dockerd` 层还没验证成功**：`curl` 走 `ghcr.nju.edu.cn` 同一层能到 37 MB/s，但 `docker pull ghcr.nju.edu.cn/...` 在服务器上停在 `Waiting`、/var/lib/docker 不增长（2026-11-16 实测，原因未定位）。**不要把这个当既定方案写进安装文档**。真要这么用，先用 `curl` 把层下完再 `docker load`，或在有原生外网出口的机器上拉好后 `docker save | ssh` 过去。
 
 ### 8.3 代理
 

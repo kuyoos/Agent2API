@@ -60,7 +60,7 @@ Agent2API は **AI ルーティングゲートウェイと Agent クライアン
 | --- | --- | --- |
 | **デスクトップ**（Windows） | `Agent2API_<バージョン>_x64-setup.exe` | アプリウィンドウ |
 | **サーバー**（Windows Server / Linux、GUI なし） | `agent2api-server-windows-amd64.zip`、`agent2api-server-linux-<arch>.tar.gz` | ブラウザーパネル |
-| **Docker** | `aimodcc/agent2api:latest`（amd64 / arm64） | ブラウザーパネル |
+| **Docker** | `ghcr.io/kuyoos/agent2api:latest`（amd64 / arm64） | ブラウザーパネル |
 
 **デスクトップ**: カスタムプロバイダーとアカウントを追加し、ゲートウェイキーを作成。「Agent」ページで接続設定を適用するか、クライアントに `http://127.0.0.1:3065/v1` とそのキーを設定してください。追加の機能は対応プラグインのインストールが必要です。
 
@@ -80,7 +80,7 @@ cd C:\agent2api-pkg; .\install-service.ps1
 **Docker**:
 
 ```bash
-docker run -d --name agent2api --restart unless-stopped -p 3065:3065 -v ./data:/data aimodcc/agent2api:latest
+docker run -d --name agent2api --restart unless-stopped -p 3065:3065 -v ./data:/data ghcr.io/kuyoos/agent2api:latest
 ```
 
 どの形態でも、導入後にパネル（`http://127.0.0.1:3065/`。サーバーと Docker はホストの IP に読み替え）を開いて管理者アカウントを登録し、「ゲートウェイキー」ページでキーを作成してください。疎通確認: `curl http://127.0.0.1:3065/health`

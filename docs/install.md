@@ -24,7 +24,7 @@
 | **macOS / Linux 桌面端**（需自行构建） | 源码构建的 `_universal.dmg` / `_amd64.deb` / `_amd64.AppImage` | 应用窗口 | 本 fork 的 Release **只出 Windows 桌面端与服务端包**，macOS / Linux 桌面版不随 Release 分发，需按各语言 README 的「开发与构建」自行编译 |
 | **Windows 服务端**（无 GUI） | `agent2api-server-windows-amd64.zip` | **浏览器面板** | 命令行安装、注册成 Windows 服务，见 [服务端](#服务端windows--linux无界面) |
 | **Linux 服务端**（无 GUI） | `agent2api-server-linux-<arch>.tar.gz` | **浏览器面板** | 命令行安装、systemd 托管，同一个包也是容器内更新载荷 |
-| **Docker** | `aimodcc/agent2api:latest` | **浏览器面板** | amd64 / arm64 双架构，见 [Docker](#docker) |
+| **Docker** | `ghcr.io/kuyoos/agent2api:latest` | **浏览器面板** | amd64 / arm64 双架构，见 [Docker](#docker) |
 
 > 选哪个：**自己有桌面**（要托盘、开机自启、本机登录态导入）→ 桌面端；
 > **服务器上没有图形界面**（Windows Server / Linux 服务器）→ 服务端包；
@@ -170,12 +170,14 @@ Linux 写在 `/etc/agent2api/agent2api.env`；Windows 改服务注册表的
 
 ## Docker
 
-镜像标签：`latest` 跟随最新正式版，`beta` 跟随最新 beta 预发布版；也可用完整版本号（例如 `3.3.0-beta.3`）固定版本。要使用 beta，把下方命令或 Compose 配置中的 `aimodcc/agent2api:latest` 改为 `aimodcc/agent2api:beta`；更新时运行 `docker compose pull && docker compose up -d`。beta 发布不会改动 `latest`，手动开发构建只更新 `dev`。同一份镜像也同步发布在 GitHub 容器镜像库：把镜像名换成 `ghcr.io/aimod-cc/agent2api` 即可，标签规则完全相同。
+镜像发布在 GitHub 容器镜像库 `ghcr.io/kuyoos/agent2api`：推 `v*` 正式版 tag 出 `<版本号>` 与 `latest`；beta tag 出 `<版本号>` 与滚动 `beta`，**不移动 `latest`**；手动触发的构建只更新 `dev`。也可用完整版本号（例如 `3.5.1`）固定。要用 beta，把下方命令或 Compose 配置里的 `:latest` 改成 `:beta`；更新时运行 `docker compose pull && docker compose up -d`。
+
+> 上游的 `aimodcc/agent2api` 里**没有本 fork 的版本**（最新只到上游 3.5.0-beta.1），别混用。GHCR 的新包**默认私有**，`docker pull` 报 401 时到仓库 Packages 页把该包改成 Public。
 
 ```bash
 docker run -d --name agent2api --restart unless-stopped \
   -p 3065:3065 -v ./data:/data \
-  aimodcc/agent2api:latest
+  ghcr.io/kuyoos/agent2api:latest
 ```
 
 浏览器打开 `http://<主机>:3065`，首次进入会引导**注册管理员账号**；登录后在「网关 Key」页建一把 API Key 给客户端用 —— `http://<主机>:3065/v1` 即 OpenAI 兼容端点（未建 Key 前拒绝转发）。状态（SQLite 库 / 配置 / 日志）都在 `./data` 一个卷里。
@@ -185,7 +187,7 @@ compose 用户（amd64 / arm64 都有镜像）：
 ```yaml
 services:
   agent2api:
-    image: aimodcc/agent2api:latest
+    image: ghcr.io/kuyoos/agent2api:latest
     container_name: agent2api
     restart: unless-stopped
     ports:
@@ -220,7 +222,7 @@ services:
 # docker run
 docker run -d --name agent2api --restart unless-stopped --memory=1g \
   -p 3065:3065 -v ./data:/data \
-  aimodcc/agent2api:latest
+  ghcr.io/kuyoos/agent2api:latest
 ```
 
 compose 用户在服务里加一行 `mem_limit: 1g`（`docker-compose.yml` 里已附注释示例）；swarm 或 `docker compose --compatibility` 用 `deploy.resources.limits.memory`。1g 只是起点，按实际并发量调。

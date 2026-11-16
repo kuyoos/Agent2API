@@ -26,7 +26,7 @@
 | **macOS / Linux 데스크톱**(직접 빌드) | 소스에서 빌드한 `_universal.dmg` / `_amd64.deb` / `_amd64.AppImage` | 앱 창 | 본 fork의 Release는 **Windows 데스크톱과 서버 패키지만** 제공합니다. macOS / Linux 데스크톱 버전은 배포되지 않으며, 각 언어 README의 "개발 및 빌드"에 따라 직접 빌드해야 합니다 |
 | **Windows 서버** (GUI 없음) | `agent2api-server-windows-amd64.zip` | **브라우저 패널** | 명령줄로 설치하고 Windows 서비스로 등록 —— [서버](#서버windows--linux-헤드리스) 참고 |
 | **Linux 서버** (GUI 없음) | `agent2api-server-linux-<arch>.tar.gz` | **브라우저 패널** | 명령줄로 설치하고 systemd 로 상주. 같은 패키지가 컨테이너 내 업데이트 페이로드도 겸합니다 |
-| **Docker** | `aimodcc/agent2api:latest` | **브라우저 패널** | amd64 / arm64 이미지, [Docker 배포](#docker) 참고 |
+| **Docker** | `ghcr.io/kuyoos/agent2api:latest` | **브라우저 패널** | amd64 / arm64 이미지, [Docker 배포](#docker) 참고 |
 
 > 무엇을 고를까: **데스크톱이 있다**(트레이, 부팅 시 자동 시작, 본机 로그인 상태 가져오기가 필요) → 데스크톱 버전.
 > **서버에 그래픽 인터페이스가 없다**(Windows Server / Linux 서버) → 서버 패키지.
@@ -156,12 +156,14 @@ Linux 에서는 `/etc/agent2api/agent2api.env` 에, Windows 에서는 서비스 
 
 ## Docker
 
-이미지 태그: `latest`는 최신 정식 버전을, `beta`는 최신 beta 사전 출시 버전을 따릅니다. `3.3.0-beta.3` 같은 전체 버전 번호로 버전을 고정할 수도 있습니다. beta를 사용하려면 아래 명령이나 Compose 설정의 `aimodcc/agent2api:latest`를 `aimodcc/agent2api:beta`로 바꾸고, 업데이트할 때 `docker compose pull && docker compose up -d`를 실행하세요. beta 출시 시 `latest`는 변경되지 않으며, 수동 개발 빌드는 `dev`만 업데이트합니다. 동일한 이미지가 GitHub Container Registry에도 게시됩니다. 이미지 이름을 `ghcr.io/aimod-cc/agent2api`로 바꾸면 됩니다(태그 규칙은 동일합니다).
+이미지는 GitHub Container Registry `ghcr.io/kuyoos/agent2api`에 게시됩니다. 정식 `v*` 태그를 push하면 `<버전>`과 `latest`, beta 태그면 `<버전>`과 롤링 `beta`가 나오며 **`latest`는 움직이지 않습니다**. 수동 실행 빌드는 `dev`만 업데이트합니다. `3.5.1` 같은 전체 버전 번호로 고정할 수도 있습니다. beta를 사용하려면 아래 명령이나 Compose 설정의 `:latest`를 `:beta`로 바꾸고, 업데이트할 때 `docker compose pull && docker compose up -d`를 실행하세요.
+
+> 업스트림 `aimodcc/agent2api`에는 **본 fork의 빌드가 없습니다**(업스트림 최신은 3.5.0-beta.1까지). 섞어 쓰지 마세요. GHCR의 새 패키지는 **기본이 비공개**입니다. `docker pull`이 401을 반환하면 저장소의 Packages 페이지에서 해당 패키지를 Public으로 바꾸세요.
 
 ```bash
 docker run -d --name agent2api --restart unless-stopped \
   -p 3065:3065 -v ./data:/data \
-  aimodcc/agent2api:latest
+  ghcr.io/kuyoos/agent2api:latest
 ```
 
 브라우저에서 `http://<호스트>:3065`를 열면 첫 방문 시 **관리자 계정 등록**으로 안내합니다. 로그인 후 "게이트웨이 키" 페이지에서 클라이언트용 API 키를 만들면 됩니다 — `http://<호스트>:3065/v1`이 OpenAI 호환 엔드포인트이며, 키를 만들기 전에는 전달을 거부합니다. 모든 상태(SQLite 데이터베이스 / 설정 / 로그)는 `./data` 볼륨 하나에 저장됩니다.
@@ -171,7 +173,7 @@ compose 사용자용(amd64 / arm64 이미지 모두 제공):
 ```yaml
 services:
   agent2api:
-    image: aimodcc/agent2api:latest
+    image: ghcr.io/kuyoos/agent2api:latest
     container_name: agent2api
     restart: unless-stopped
     ports:
@@ -206,7 +208,7 @@ services:
 # docker run
 docker run -d --name agent2api --restart unless-stopped --memory=1g \
   -p 3065:3065 -v ./data:/data \
-  aimodcc/agent2api:latest
+  ghcr.io/kuyoos/agent2api:latest
 ```
 
 compose 사용자는 서비스에 `mem_limit: 1g` 한 줄을 추가하세요(`docker-compose.yml` 에 주석 예시가 있습니다). swarm 또는 `docker compose --compatibility` 에서는 `deploy.resources.limits.memory` 를 씁니다. 1g 는 출발점일 뿐이며 실제 동시 처리량에 맞춰 조정하세요.
