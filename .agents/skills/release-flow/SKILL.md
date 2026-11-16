@@ -291,7 +291,7 @@ gh run list --repo Agent2Builder/agent2api-releases --limit 4
 - [ ] GitHub Release：`gh release view vX.Y.Z --repo kuyoos/Agent2API` —— 正文日志齐全，附件共 **7 份**：Windows `Agent2API_<版本>_x64-setup.exe`、两个 `agent2api-server-linux-*.tar.gz` + 各自 `.sha256`（容器内更新包，见第 5 节）、`agent2api-server-windows-amd64.zip` + `.sha256`；
 - [ ] **手机端包不在 Release 里**：APK / IPA 不在本 fork 的构建范围内；若要恢复必须先获用户确认，并同步修改工作流与安装文档。
 - [ ] **插件包**：在独立插件构建仓库的对应 Release 中检查五个平台包及官方签名，不计入主程序附件。
-- [ ] GHCR：`ghcr.io/kuyoos/agent2api:<版本>` 与 `:latest` 可拉，digest 与 `:dev` 那次构建的清单一致（**新包默认私有**，首次要去包设置改 Public）；配了 Docker Hub 凭据时再查 `aimodcc/agent2api` 的 Tags 页；
+- [ ] GHCR：`ghcr.io/kuyoos/agent2api:<版本>` 与 `:latest` 可拉，digest 与 `:dev` 那次构建的清单一致（**本仓库的包已设为 Public，可匿名拉取**；若是全新仓库 / 全新包名首次推送，GitHub 仍按默认私有处理，需去包设置改 Public）；配了 Docker Hub 凭据时再查 `aimodcc/agent2api` 的 Tags 页；
 - [ ] **更新检查真的能查到**（这条最容易漏）：`gh release view vX.Y.Z --repo Agent2Builder/agent2api-releases` 有内容，且索引仓库的 `app.json` 里 `app.repo` 指向同一个仓库。两者对不上时，用户面板会显示「已是最新」；
 - [ ] 安装包「关于」页版本号与 tag 一致；
 - [ ] 安装文档对得上实际产物：`docs/install.md` 与 5 份译文的产物名、端口、命令、环境变量跟这次 Release 一致（README 里那几张速查表同理）；
@@ -319,7 +319,7 @@ gh run list --repo Agent2Builder/agent2api-releases --limit 4
 
 ### 8.2 镜像与 GHCR
 
-- **GHCR 新包默认私有**：首次推送后需到包设置手动改 Public，否则别人 `docker pull` 会 401（API 改不了这个默认值）。
+- **GHCR 包的可见性**：GitHub 的默认是「新包私有」，API 改不了这个默认值，只能在包设置页手动改 Public。本仓库 `ghcr.io/kuyoos/agent2api` **已改好且实测可匿名拉取**（2026-11-16 复核：token / tags / manifest 全 200）；只有换仓库或换包名时，首次推送后还要再改一次。
 - **镜像名写死在 `GHCR_IMAGE` env 里**（`ghcr.io/kuyoos/agent2api`）：`$GITHUB_REPOSITORY` 带大小写（`kuyoos/Agent2API`），而镜像名必须全小写；仓库改名时改这一处 + `labels:` 里的 source 地址即可。
 - **包要关联主仓库**：`metadata-action` 默认把 `org.opencontainers.image.source` 填成「工作流所在仓库」。`docker.yml` 在 `labels:` 里显式重写为 `https://github.com/kuyoos/Agent2API`，这样 GHCR 的包页面才会指回源码仓库。
 - **服务器拉不动 GHCR 时**（实测这台阿里云：`ghcr.io` 直连的 blob 只有 10–30 KB/s，~120MB 镜像要拉几十分钟）：`registry-mirrors` 只代 Docker Hub，GHCR 仍直连，改加速器没用。
