@@ -773,7 +773,7 @@ pub(super) fn daily_trend(daily: &BTreeMap<String, DailyEntry>, start: &str, end
         let day = daily.get(&key);
         let (tokens, requests) = day.map(|item| (item.tokens, item.requests)).unwrap_or((0, 0));
         let models = day.map(|item| super::source_report::all_model_rows(&item.model_tokens)).unwrap_or_default();
-        let (clients, api_keys) = day.map(|item| super::source_report::source_breakdown).unwrap_or_default();
+        let (clients, api_keys) = day.map(super::source_report::source_breakdown).unwrap_or_default();
         // 积分（**新增键**）：`credit` 为 `null` 表示这天没有读数（前端画线时
         // 留断点而不是画到 0），`ppm` 同口径也是 `null`
         let credit = day.and_then(|item| item.credit);
