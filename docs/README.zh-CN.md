@@ -58,7 +58,7 @@ Agent2API 是一个 **AI 路由网关 + Agent 客户端接管**项目。它将�
 
 | 形态 | 产物 | 界面 |
 | --- | --- | --- |
-| **桌面端**（Windows / macOS / Linux） | `Agent2API_<版本>_x64-setup.exe`、`_universal.dmg`、`_amd64.deb`、`_amd64.AppImage` | 应用窗口 |
+| **桌面端**（Windows） | `Agent2API_<版本>_x64-setup.exe` | 应用窗口 |
 | **服务端**（Windows Server / Linux，无 GUI） | `agent2api-server-windows-amd64.zip`、`agent2api-server-linux-<arch>.tar.gz` | 浏览器面板 |
 | **Docker** | `aimodcc/agent2api:latest`（amd64 / arm64） | 浏览器面板 |
 
@@ -131,7 +131,7 @@ npm run build:icon         # 生成图标源图（改图标设计后执行，再
 
 打包产物为 `target/release/bundle/nsis/Agent2API_<版本>_x64-setup.exe`（3.0 版约 8.6 MB；`src-tauri/.cargo/config.toml` 把 cargo 的 `target-dir` 指到了项目根的 `target/`）。
 
-macOS 的 `.dmg` **只能在 macOS 上构建**（`npm --prefix desktop-tauri run build -- --target universal-apple-darwin`），无法从 Windows 交叉编译，所以正式产物由 CI 的 `build` 工作流产（`macos-latest` + 双目标合并）；Docker 镜像与容器内更新用的服务端包由同一工作流的 `linux-server` job 出（复用 Dockerfile 的编译路径，包内可执行文件与镜像同源同工具链）。
+本 fork 的 CI（`.github/workflows/build.yml`）**只出 Windows 桌面端与服务端包**：Windows 安装包由 `windows` job 出；Docker 镜像与容器内更新用的服务端包由 `linux-server` job 出（复用 Dockerfile 的编译路径，包内可执行文件与镜像同源同工具链）。macOS 的 `.dmg` **只能在 macOS 上构建**（`npm --prefix desktop-tauri run build -- --target universal-apple-darwin`）、Linux 的 deb / AppImage 需要 webkit2gtk / gtk3，两者都不随 Release 分发，需要时请在对应平台上自行编译。
 
 ## 📜 使用声明
 

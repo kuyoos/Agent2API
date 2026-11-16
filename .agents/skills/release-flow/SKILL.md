@@ -28,7 +28,7 @@ description: Agent2API（workbuddy）仓库的协作与发版规范 —— 分�
 
 ### 为什么这么分
 
-七个平台 job + 两架构镜像，跑一次是实打实的重负载；而 tag 是发版动作、频率不可控。把「打一个版本标签」变成「自动兑换七台虚拟机」，最坏会被判定为 Actions 滥用。构建挪到专用账号下，额度与负载都落在那边。
+三个平台 job + 两架构镜像，跑一次是实打实的重负载；而 tag 是发版动作、频率不可控。把「打一个版本标签」变成「自动兑换三台虚拟机」，最坏会被判定为 Actions 滥用。**本 fork 已在本地 Actions 里构建**，且只出 Windows 桌面端与服务端包（见 `.github/workflows/build.yml` 文件头）。
 
 ### 一次 tag 的完整链路
 
@@ -172,7 +172,7 @@ gh run list --repo Agent2Builder/agent2api-releases --limit 4
 
 | 工作流（跑在构建仓库） | 产出 | 说明 |
 |---|---|---|
-| `release.yml` → `publish-installers.yml` | 桌面端、服务端与手机端构建产物 | 构建任务为 `macos`、`windows`、`linux-desktop`、`linux-server`（amd64 / arm64）、`windows-server`、`android`、`ios`。七个任务全部成功后，`publish-installers.yml` 由**完成事件自动触发**（`workflow_run`）：校验十份桌面 / 服务端附件并发布，再同步一份到源码仓库。手机安装包只保留 Actions artifact。插件仍由独立插件构建仓库发布 |
+| `release.yml` → `publish-installers.yml` | 桌面端与服务端构建产物 | 构建任务为 `windows`、`linux-server`（amd64 / arm64）、`windows-server`。三个任务全部成功后，`publish-installers.yml` 由**完成事件自动触发**（`workflow_run`）：校验七份附件并发布，再同步一份到源码仓库。**本 fork 不出 macOS dmg 与 Linux 桌面端 deb / AppImage**。插件仍由独立插件构建仓库发布 |
 | `docker.yml` | Docker Hub `aimodcc/agent2api:<版本>` 与 GHCR `ghcr.io/aimod-cc/agent2api:<版本>`，amd64 / arm64 双架构 | 正式版发布 `<版本>` + `:latest`；beta 预发布发布 `<版本>` + 滚动 `:beta`，**不移动 `:latest`**；手动 `workflow_dispatch` 且不填 ref 时只出 `:dev`，不移动 `:beta` 或 `:latest`。两个仓库推的是同一份清单 |
 
 **源码仓库的 `build.yml` 只做派发，`docker.yml` 已整体删除** —— 镜像构建现在只在构建仓库里跑（源码仓库保留那份只会让人误以为它还在工作）。
@@ -186,9 +186,9 @@ gh run watch <run-id> --repo Agent2Builder/agent2api-releases --exit-status
 
 **自动收尾**由构建仓库的 `publish-installers.yml` 完成，它监听 `release.yml` 的完成事件（`workflow_run`），只有一个 job、顺序做两步：
 
-- **发布到本仓库**：按那次构建 run 取产物，用 `.github/scripts/collect-assets.sh` 清点（**恰好十份**；四份桌面端包名里的版本号必须一致；服务端包的 sha256 与包本身对得上，容错 Windows 侧生成的 CRLF 行尾），先建草稿 Release、**逐个**上传、十份齐了才公开；beta 自动标预发布。**桌面端的更新检查读的就是这一份。**
+- **发布到本仓库**：按那次构建 run 取产物清点（**恰好七份**；Windows 包名里的版本号必须与 tag 一致；服务端包的 sha256 与包本身对得上，容错 Windows 侧生成的 CRLF 行尾），先建草稿 Release、**逐个**上传、七份齐了才公开；beta 自动标预发布。**桌面端的更新检查读的就是这一份。**
 - **镜像到源码仓库**：同一份附件与逐字相同的正文，用 `SOURCE_RELEASE_TOKEN` 建 / 改 `aimod-cc/Agent2API` 的 Release。缺这个 token 或网络失败时这一步明确失败，本仓库已发布的 Release 保留、用户更新不受影响。
-- **为什么发布与构建分成两个工作流**：发布出错只需要重跑 `publish-installers.yml`（几十秒、不重新编译），不会被迫把七个平台再建一遍 —— tag 是发版动作、频率不可控，重跑构建最坏会被判成 Actions 滥用。重跑用 `only` 挑步骤，按 run 号补发就传 `run_id`：
+- **为什么发布与构建分成两个工作流**：发布出错只需要重跑 `publish-installers.yml`（几十秒、不重新编译），不会被迫把三个平台再建一遍 —— tag 是发版动作、频率不可控，重跑构建最坏会被判成 Actions 滥用。重跑用 `only` 挑步骤，按 run 号补发就传 `run_id`：
 
   ```bash
   # 补发 / 重跑（不填 run_id 时用触发本工作流的那次构建）
@@ -277,7 +277,7 @@ gh run list --repo Agent2Builder/agent2api-releases --limit 4
 #    核对发布 / 镜像那两步与 docker 成功，无需本地下载和上传
 ```
 
-验收就四条：Release 显示 **Prerelease**、exe / dmg / deb / AppImage / APK 附件齐全、Docker Hub 上 `:latest` 的 Pushed 时间**没有**跟着变、APK 能装能连（完整清单见第 7 节）。
+验收就四条：Release 显示 **Prerelease**、exe 与三个服务端附件（含 .sha256）齐全、Docker Hub 上 `:latest` 的 Pushed 时间**没有**跟着变、面板更新检查能查到（完整清单见第 7 节）。
 
 **三处不能错**，每处错了都有明确症状：
 
@@ -297,14 +297,10 @@ gh run list --repo Agent2Builder/agent2api-releases --limit 4
 
 以下 `gh` 命令都带 `--repo Agent2Builder/agent2api-releases` —— Release 与构建 run 都在构建仓库，不带这个参数会去查源码仓库然后什么都找不到（手动跑 gh 前先设代理，见第 8 节）。
 
-- [ ] **构建仓库的 run 全绿**：`gh run list --repo Agent2Builder/agent2api-releases --limit 4` —— 应看到 `Release` 与 `docker` 两个 run，前者七个 job 全绿（含 `publish`）；
-- [ ] GitHub Release（在构建仓库）：`gh release view vX.Y.Z --repo Agent2Builder/agent2api-releases` —— 正文日志齐全，桌面端附件都在：Windows `Agent2API_<版本>_x64-setup.exe`、macOS `Agent2API_<版本>_universal.dmg`、Linux `Agent2API_<版本>_amd64.deb` 与 `Agent2API_<版本>_amd64.AppImage`（另有两个 `agent2api-server-linux-*.tar.gz` + `.sha256`，那是容器内更新包，见第 5 节）；
-- [ ] **镜像到源码仓库**：`gh release view vX.Y.Z --repo aimod-cc/Agent2API` —— 附件数与构建仓库一致（默认 10 个：4 个桌面端 + 3 个服务端包 ×2 带校验 + 无手机端）；正文与构建仓库那份逐字相同，**不带**指向构建仓库的附加说明；
-- [ ] **手机端包不在 Release 里**：自动发布固定只挂十份桌面 / 服务端附件。APK / IPA 保留为构建 artifact；恢复公开发布必须先获用户确认，并同步修改自动发布附件清单与安装文档。
-- [ ] **插件包**：在独立插件构建仓库的对应 Release 中检查五个平台包及官方签名，不计入主程序十份附件。
-- [ ] Linux 桌面端：装 deb（或 `chmod +x` 后跑 AppImage）能启动，且面板「设置 → 软件更新」能检查到版本、给出对应包型的安装入口（deb → 系统安装器，AppImage → 换文件）；
-- [ ] 手机端 APK：构建 run 的 `android-apk` artifact 中有 `Agent2API-<版本>.apk` 与 `.sha256`，不公开挂 Release。
-- [ ] 手机端 iOS：构建 run 的 `ios-ipa` artifact 中有 `Agent2API-<版本>.ipa` 与 `.sha256`，不公开挂 Release；未签名包需自行重签。
+- [ ] **构建仓库的 run 全绿**：`gh run list --repo kuyoos/Agent2API --limit 4` —— 应看到 `build` 与 `docker` 两个 run，前者四个 job 全绿（`verify` / `windows` / `linux-server` ×2 架构 / `windows-server` / `publish`）；
+- [ ] GitHub Release：`gh release view vX.Y.Z --repo kuyoos/Agent2API` —— 正文日志齐全，附件共 **7 份**：Windows `Agent2API_<版本>_x64-setup.exe`、两个 `agent2api-server-linux-*.tar.gz` + 各自 `.sha256`（容器内更新包，见第 5 节）、`agent2api-server-windows-amd64.zip` + `.sha256`；
+- [ ] **手机端包不在 Release 里**：APK / IPA 不在本 fork 的构建范围内；若要恢复必须先获用户确认，并同步修改工作流与安装文档。
+- [ ] **插件包**：在独立插件构建仓库的对应 Release 中检查五个平台包及官方签名，不计入主程序附件。
 - [ ] Docker Hub：`aimodcc/agent2api` 的 Tags 页出现 `<版本>` 与 `latest`，Pushed 时间一致；GHCR：`ghcr.io/aimod-cc/agent2api:<版本>` 可拉（**新包默认私有**，首次要去包设置改 Public）；
 - [ ] **更新检查真的能查到**（这条最容易漏）：`gh release view vX.Y.Z --repo Agent2Builder/agent2api-releases` 有内容，且索引仓库的 `app.json` 里 `app.repo` 指向同一个仓库。两者对不上时，用户面板会显示「已是最新」；
 - [ ] 安装包「关于」页版本号与 tag 一致；

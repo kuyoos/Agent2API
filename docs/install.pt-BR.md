@@ -1,6 +1,6 @@
 # Instalação e implantação
 
-Esta página é o **guia completo de instalação e operação** das três formas de entrega: **desktop** (Windows / macOS / Linux), **servidor** (Windows / Linux, sem interface gráfica) e **Docker**. Se não souber qual escolher, comece pela tabela abaixo.
+Esta página é o **guia completo de instalação e operação** das três formas de entrega: **desktop** (Windows), **servidor** (Windows / Linux, sem interface gráfica) e **Docker**. Se não souber qual escolher, comece pela tabela abaixo.
 
 Depois de instalar, qualquer forma é gerenciada pelo **painel no navegador** (contas, chaves de gateway, relatórios) — o painel usa a mesma porta do gateway; a forma desktop tem também a janela do aplicativo.
 
@@ -9,7 +9,7 @@ Depois de instalar, qualquer forma é gerenciada pelo **painel no navegador** (c
 ## Sumário
 
 - [Qual forma escolher](#qual-forma-escolher)
-- [Desktop (Windows / macOS / Linux)](#desktop-windows--macos--linux)
+- [Desktop (Windows)](#desktop-windows)
 - [Servidor (Windows / Linux, sem interface)](#servidor-windows--linux-sem-interface)
 - [Docker](#docker)
 - [Verificação e conexão do cliente](#verificação-e-conexão-do-cliente)
@@ -23,8 +23,7 @@ Escolha a linha que corresponde à sua máquina:
 | Forma | Artefato | Interface | Observações |
 | --- | --- | --- | --- |
 | **Desktop Windows** (recomendado) | `Agent2API_<versão>_x64-setup.exe` | Janela do app | Instalador NSIS, instala em `C:\Program Files\Agent2API` por padrão e exige aprovação de administrador |
-| **Desktop macOS** | `Agent2API_<versão>_universal.dmg` | Janela do app | Binário universal (Apple Silicon e Intel compilados separadamente e mesclados); macOS 10.15+ |
-| **Desktop Linux** | `Agent2API_<versão>_amd64.deb` ou `Agent2API_<versão>_amd64.AppImage` | Janela do app | O deb instala no sistema (requer webkit2gtk-4.1 / gtk3); o AppImage é um único arquivo autossuficiente que roda em qualquer distribuição |
+| **Desktop macOS / Linux** (compile você mesmo) | `_universal.dmg` / `_amd64.deb` / `_amd64.AppImage` compilados do código-fonte | Janela do app | Os releases deste fork **trazem apenas o desktop Windows e os pacotes de servidor**; as versões desktop de macOS / Linux não são publicadas — compile seguindo a seção "Desenvolvimento e build" do README |
 | **Servidor Windows** (sem GUI) | `agent2api-server-windows-amd64.zip` | **Painel no navegador** | Instalação por linha de comando, registrado como serviço do Windows — veja [Servidor](#servidor-windows--linux-sem-interface) |
 | **Servidor Linux** (sem GUI) | `agent2api-server-linux-<arch>.tar.gz` | **Painel no navegador** | Instalação por linha de comando, sob systemd; o mesmo pacote também é o payload da atualização dentro do contêiner |
 | **Docker** | `aimodcc/agent2api:latest` | **Painel no navegador** | Imagens amd64 / arm64, veja [Implantação com Docker](#docker) |
@@ -36,9 +35,9 @@ Escolha a linha que corresponde à sua máquina:
 > A forma desktop exige uma sessão gráfica e **não pode ser instalada em servidor sem interface**.
 > O pacote de servidor não linka WebView / GTK: um executável e um diretório `ui/` bastam.
 
-## Desktop (Windows / macOS / Linux)
+## Desktop (Windows)
 
-Os **apps de desktop** (Windows / macOS / Linux) bastam ser iniciados após a instalação — **não é necessário instalar Node nem qualquer outro runtime**; o gateway roda dentro do processo do aplicativo e permanece na bandeja.
+O **app de desktop** basta ser iniciado após a instalação — **não é necessário instalar Node nem qualquer outro runtime**; o gateway roda dentro do processo do aplicativo e permanece na bandeja.
 
 1. Na primeira execução, o gateway local (porta 3065) sobe dentro do processo do aplicativo e a janela principal abre. Se um diretório ou arquivo de dados de uma versão antiga for encontrado, um diálogo orienta a migração — basta seguir as instruções.
 2. Clique em "Adicionar conta" na página de Contas, escolha um provedor e siga o diálogo: entre ou preencha as credenciais (login pela web / código por SMS / colar credenciais / importar o estado de login desta máquina).
@@ -46,11 +45,9 @@ Os **apps de desktop** (Windows / macOS / Linux) bastam ser iniciados após a in
 
 Fechar a janela apenas minimiza para a bandeja, e o gateway continua encaminhando em segundo plano; para sair de verdade, clique com o botão direito no ícone da bandeja e escolha "Sair".
 
-> **Primeira abertura no macOS**: o app dentro do dmg não tem assinatura de código nem notarização da Apple (assinar exige uma conta paga de Apple Developer — veja a explicação em `.github/workflows/build.yml`), então o Gatekeeper bloqueia a primeira execução. Libere uma vez em "Ajustes do Sistema → Privacidade e Segurança" e ele abre normalmente depois.
+> **Versões desktop de macOS / Linux**: os releases deste fork trazem apenas o desktop Windows. Se compilar você mesmo: o dmg do macOS não tem assinatura de código nem notarização, então o Gatekeeper bloqueia a primeira execução (libere uma vez em "Ajustes do Sistema → Privacidade e Segurança"); a bandeja do Linux depende de `libayatana-appindicator3` e um AppImage precisa do bit de execução antes de rodar (`chmod +x`).
 >
-> **Notas do desktop Linux**: a bandeja depende de `libayatana-appindicator3` (a maioria dos ambientes traz; instale `libayatana-appindicator3-1` e reabra se o ícone não aparecer). Um AppImage precisa do bit de execução antes da primeira execução (`chmod +x`; o app o define automaticamente ao escolher "Abrir instalador"). Atualizações: o deb passa pelo instalador do sistema (ele pede sua senha uma vez), enquanto o AppImage é atualizado substituindo o arquivo.
->
-> **Diferenças do desktop**: o "importar o estado de login desta máquina" do AutoClaw e do ChatGLM (智谱清言) só existe no Windows (ele lê texto cifrado do DPAPI, então essa seção fica oculta no macOS / Linux); os demais (Raccoon / CatPaw / Cline) leem arquivos em texto puro sob `HOME` e funcionam nas três plataformas. Bandeja, início automático, acesso pela rede local e hospedagem do painel web também funcionam no macOS / Linux.
+> **Diferenças do desktop**: o "importar o estado de login desta máquina" do AutoClaw e do ChatGLM (智谱清言) só existe no Windows (ele lê texto cifrado do DPAPI, então essa seção fica oculta no macOS / Linux); os demais (Raccoon / CatPaw / Cline) leem arquivos em texto puro sob `HOME` e funcionam nas três plataformas.
 
 ## Servidor (Windows / Linux, sem interface)
 
@@ -260,7 +257,7 @@ print(resp.choices[0].message.content)
 
 Por padrão o gateway escuta apenas `127.0.0.1`. Ao ativar "Configurações → Geral → Acesso pela rede local" ele passa a escutar todos os adaptadores e os dispositivos da rede só precisam apontar o endereço da API para o IP desta máquina (a interface mostra o endereço completo). Por segurança, é obrigatório registrar um administrador do painel antes de ativar: a API de gerenciamento passa a exigir sessão de administrador ou uma Gateway Key e, sem chave ativa, a API de encaminhamento também recusa (o fluxo cria uma chave "padrão" automaticamente). O painel web pode ser exposto à rede local opcionalmente (fechado por padrão). As mudanças valem após reiniciar.
 
-Os instaladores de desktop (Windows / macOS) já incluem a pasta `ui/` do painel web: ao ativar também a opção de expor o painel de gerenciamento à rede local, dispositivos da rede podem abrir o mesmo endereço no navegador e ver a interface de gerenciamento — a mesma interface da versão Docker. **A janela do desktop em si nunca passa pelo login web** (não existe página de login no app): ela se autentica com a primeira Gateway Key desta máquina, então ligar esse interruptor não pede login no app. A página de login web só aparece quando um navegador abre o painel.
+O instalador de desktop (Windows) já inclui a pasta `ui/` do painel web: ao ativar também a opção de expor o painel de gerenciamento à rede local, dispositivos da rede podem abrir o mesmo endereço no navegador e ver a interface de gerenciamento — a mesma interface da versão Docker. **A janela do desktop em si nunca passa pelo login web** (não existe página de login no app): ela se autentica com a primeira Gateway Key desta máquina, então ligar esse interruptor não pede login no app. A página de login web só aparece quando um navegador abre o painel.
 
 ## Celular
 
@@ -276,7 +273,7 @@ As três rodam o mesmo código de interface. A diferença é quem serve a págin
 
 ### Pré-requisitos (por forma)
 
-**Desktop (Windows / macOS / Linux)**: as duas opções precisam estar ligadas; uma sem a outra não funciona.
+**Desktop (Windows)**: as duas opções precisam estar ligadas; uma sem a outra não funciona.
 
 1. "Configurações → Geral → Acesso pela rede local" — permite que dispositivos da rede acessem o gateway. O fluxo de ativação pede o registro de um administrador do painel e cria automaticamente uma chave chamada "padrão".
 2. "Configurações → Geral → Acesso pela rede local → também expor o painel de gerenciamento web" — serve a pasta estática `ui/`. **Necessária para a forma navegador / PWA** (`/m` é servido pelo gateway, então retorna 404 enquanto esta opção estiver desligada). **O APK / IPA não precisam dela** (a interface está no pacote), mas ainda precisam da opção 1 — sem ela o gateway escuta apenas em `127.0.0.1` e o celular não alcança.

@@ -1,6 +1,6 @@
 # 安装与部署
 
-本页是三种交付形态的**完整安装与运维说明**：桌面端（Windows / macOS / Linux）、服务端（Windows / Linux，无界面）、Docker。不确定该选哪个，先看下面的对照表。
+本页是三种交付形态的**完整安装与运维说明**：桌面端（Windows）、服务端（Windows / Linux，无界面）、Docker。不确定该选哪个，先看下面的对照表。
 
 各形态装完之后**都在浏览器面板里管理**（加账号、建网关 Key、看报表）—— 面板与网关同端口，桌面端则额外有应用窗口。
 
@@ -9,7 +9,7 @@
 ## 目录
 
 - [选哪种形态](#选哪种形态)
-- [桌面端（Windows / macOS / Linux）](#桌面端windows--macos--linux)
+- [桌面端（Windows）](#桌面端windows)
 - [服务端（Windows / Linux，无界面）](#服务端windows--linux无界面)
 - [Docker](#docker)
 - [验证与客户端接入](#验证与客户端接入)
@@ -21,8 +21,7 @@
 | 形态 | 产物 | 界面 | 说明 |
 | --- | --- | --- | --- |
 | **Windows 桌面端** | `Agent2API_<版本>_x64-setup.exe` | 应用窗口 | NSIS 安装包，默认装到 `C:\Program Files\Agent2API`，安装时需要管理员授权 |
-| **macOS 桌面端** | `Agent2API_<版本>_universal.dmg` | 应用窗口 | 通用二进制（Apple Silicon 与 Intel 各编一遍再合并），最低 macOS 10.15 |
-| **Linux 桌面端** | `Agent2API_<版本>_amd64.deb` 或 `Agent2API_<版本>_amd64.AppImage` | 应用窗口 | deb 装进系统（依赖 webkit2gtk-4.1 / gtk3）；AppImage 免安装单文件，任意发行版可用 |
+| **macOS / Linux 桌面端**（需自行构建） | 源码构建的 `_universal.dmg` / `_amd64.deb` / `_amd64.AppImage` | 应用窗口 | 本 fork 的 Release **只出 Windows 桌面端与服务端包**，macOS / Linux 桌面版不随 Release 分发，需按各语言 README 的「开发与构建」自行编译 |
 | **Windows 服务端**（无 GUI） | `agent2api-server-windows-amd64.zip` | **浏览器面板** | 命令行安装、注册成 Windows 服务，见 [服务端](#服务端windows--linux无界面) |
 | **Linux 服务端**（无 GUI） | `agent2api-server-linux-<arch>.tar.gz` | **浏览器面板** | 命令行安装、systemd 托管，同一个包也是容器内更新载荷 |
 | **Docker** | `aimodcc/agent2api:latest` | **浏览器面板** | amd64 / arm64 双架构，见 [Docker](#docker) |
@@ -34,9 +33,9 @@
 > 桌面端需要图形界面，**装不到无 GUI 的服务器上**。服务端包不链接任何
 > WebView / GTK 依赖，一个可执行文件加一个 `ui/` 目录就能跑。
 
-## 桌面端（Windows / macOS / Linux）
+## 桌面端（Windows）
 
-**桌面端**（Windows / macOS / Linux）安装后启动即可，**无需安装 Node 或任何其它运行时**；网关跑在应用进程内，托盘常驻。
+**桌面端**安装后启动即可，**无需安装 Node 或任何其它运行时**；网关跑在应用进程内，托盘常驻。
 
 1. 首次启动即在应用进程内启动本机网关（端口 3065）并打开主窗口；若检测到旧版本的数据目录或数据文件，会弹窗提示迁移，按指引操作即可。
 2. 点「账号」页的「添加账号」，选提供商后按弹窗提示完成登录或填写凭证即可（方式以弹窗为准：网页登录 / 手机验证码 / 粘贴凭证 / 导入本机登录态）。
@@ -44,11 +43,9 @@
 
 关闭窗口默认最小化到托盘，网关继续在后台转发；彻底退出请在托盘图标右键选「退出」。
 
-> **macOS 首次打开**：dmg 里的应用未做 Apple 代码签名与公证（签名需要付费的 Apple Developer 账号，见 `.github/workflows/build.yml` 的说明），Gatekeeper 会拦下首次启动 —— 到「系统设置 → 隐私与安全性」里手动放行一次即可。
+> **macOS / Linux 桌面版**：本 fork 的 Release 只出 Windows 桌面端；自行编译时注意 —— macOS 的 dmg 未做 Apple 代码签名与公证，Gatekeeper 会拦首次启动（到「系统设置 → 隐私与安全性」放行一次）；Linux 桌面端托盘依赖 `libayatana-appindicator3`，AppImage 首次运行前需要可执行位（`chmod +x`）。
 >
-> **Linux 桌面端**：托盘依赖 `libayatana-appindicator3`（多数桌面环境已自带）；若桌面环境下托盘图标不显示，装 `libayatana-appindicator3-1` 后重开即可。AppImage 首次运行前需要可执行位（`chmod +x`，程序在「打开安装包」时会自动补）。更新方式：deb 走系统安装器（装的时候会问一次密码），AppImage 是换文件即升级。
->
-> **桌面端的差异**：AutoClaw 与智谱清言的「导入本机登录态」只在 Windows 可用（读的是 Windows 的 DPAPI 密文，macOS / Linux 上整段收起）；其余家（小浣熊 / CatPaw / Cline）读的是 `HOME` 下的明文文件，三个平台都可用。托盘、开机自启、局域网访问与网页面板托管在 macOS / Linux 上同样支持。
+> **桌面端的差异**：AutoClaw 与智谱清言的「导入本机登录态」只在 Windows 可用（读的是 Windows 的 DPAPI 密文，macOS / Linux 上整段收起）；其余家（小浣熊 / CatPaw / Cline）读的是 `HOME` 下的明文文件，三个平台都可用。
 
 ## 服务端（Windows / Linux，无界面）
 
@@ -274,7 +271,7 @@ print(resp.choices[0].message.content)
 
 默认只监听 `127.0.0.1`。开启「设置 → 通用 → 局域网访问」后改听所有网卡，局域网设备把 API 地址指向本机 IP 即可共用（界面会给出完整地址）。出于安全，开启前必须注册面板管理员：管理接口要求管理员会话或网关 Key，无可用 Key 时转发接口同样拒绝服务（开启流程会自动补一把「默认」Key）；也可选择同时开放网页面板（默认关闭）。改动重启生效。
 
-桌面端（Windows / macOS）装包里就带着网页面板那一份 `ui/`，打开「同时开放网页管理面板」后局域网设备用浏览器访问同一地址即是管理界面 —— 与 Docker 版是同一份界面；**桌面窗口自己不走网页登录**（没有登录页），它以本机第一把网关 Key 作为凭证，打开这个开关不需要你额外登录桌面端。网页登录页只在浏览器访问面板时出现。
+桌面端（Windows）装包里就带着网页面板那一份 `ui/`，打开「同时开放网页管理面板」后局域网设备用浏览器访问同一地址即是管理界面 —— 与 Docker 版是同一份界面；**桌面窗口自己不走网页登录**（没有登录页），它以本机第一把网关 Key 作为凭证，打开这个开关不需要你额外登录桌面端。网页登录页只在浏览器访问面板时出现。
 
 ## 手机端
 
@@ -290,7 +287,7 @@ print(resp.choices[0].message.content)
 
 ### 前置条件（按形态）
 
-**桌面端（Windows / macOS / Linux）**：两个开关都要开，缺一不可。
+**桌面端（Windows）**：两个开关都要开，缺一不可。
 
 1. 「设置 → 通用 → 局域网访问」—— 允许局域网设备访问网关。开启流程会要求先注册面板管理员，并自动补一把名为「默认」的 Key。
 2. 「设置 → 通用 → 局域网访问 → 同时开放网页管理面板」—— 托管 `ui/` 静态目录。**浏览器 / PWA 形态需要它**（`/m` 由网关出，开关关着时 404）；**APK / IPA 不需要**（界面在包里），但仍然要第 1 项，否则网关只监听 `127.0.0.1`，手机连不上。

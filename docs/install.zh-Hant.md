@@ -1,6 +1,6 @@
 # 安裝與部署
 
-本頁是三種交付形態的**完整安裝與維運說明**：桌面端（Windows / macOS / Linux）、伺服器端（Windows / Linux，無介面）、Docker。不確定該選哪個，先看下面的對照表。
+本頁是三種交付形態的**完整安裝與維運說明**：桌面端（Windows）、伺服器端（Windows / Linux，無介面）、Docker。不確定該選哪個，先看下面的對照表。
 
 各形態裝完之後**都在瀏覽器面板裡管理**（加帳號、建閘道 Key、看報表）—— 面板與閘道同連接埠，桌面端則額外有應用程式視窗。
 
@@ -9,7 +9,7 @@
 ## 目錄
 
 - [選哪種形態](#選哪種形態)
-- [桌面端（Windows / macOS / Linux）](#桌面端windows--macos--linux)
+- [桌面端（Windows）](#桌面端windows)
 - [伺服器端（Windows / Linux，無介面）](#伺服器端windows--linux無介面)
 - [Docker](#docker)
 - [驗證與客戶端接入](#驗證與客戶端接入)
@@ -23,8 +23,7 @@
 | 形態 | 產物 | 介面 | 說明 |
 | --- | --- | --- | --- |
 | **Windows 桌面端**（推薦） | `Agent2API_<版本>_x64-setup.exe` | 應用程式視窗 | NSIS 安裝包，預設裝到 `C:\Program Files\Agent2API`，安裝時需要管理員授權 |
-| **macOS 桌面端** | `Agent2API_<版本>_universal.dmg` | 應用程式視窗 | 通用二進位（Apple Silicon 與 Intel 各編一遍再合併），最低 macOS 10.15 |
-| **Linux 桌面端** | `Agent2API_<版本>_amd64.deb` 或 `Agent2API_<版本>_amd64.AppImage` | 應用程式視窗 | deb 裝進系統（依賴 webkit2gtk-4.1 / gtk3）；AppImage 免安裝單檔，任何發行版可用 |
+| **macOS / Linux 桌面端**（自行建置） | 原始碼建置的 `_universal.dmg` / `_amd64.deb` / `_amd64.AppImage` | 應用程式視窗 | 本 fork 的 Release **只出 Windows 桌面端與伺服器端包**，macOS / Linux 桌面版不隨 Release 發佈，請參考各語言 README 的「開發與建置」自行編譯 |
 | **Windows 伺服器端**（無 GUI） | `agent2api-server-windows-amd64.zip` | **瀏覽器面板** | 命令列安裝、註冊成 Windows 服務，見 [伺服器端](#伺服器端windows--linux無介面) |
 | **Linux 伺服器端**（無 GUI） | `agent2api-server-linux-<arch>.tar.gz` | **瀏覽器面板** | 命令列安裝、systemd 代管；同一個包也是容器內更新載荷 |
 | **Docker** | `aimodcc/agent2api:latest` | **瀏覽器面板** | amd64 / arm64 雙架構，見 [Docker 部署](#docker) |
@@ -36,9 +35,9 @@
 > 桌面端需要圖形介面，**裝不到無 GUI 的伺服器上**。伺服器端包不連結任何
 > WebView / GTK 依賴，一個執行檔加一個 `ui/` 目錄就能跑。
 
-## 桌面端（Windows / macOS / Linux）
+## 桌面端（Windows）
 
-**桌面端**（Windows / macOS / Linux）安裝後啟動即可，**無需安裝 Node 或任何其它執行環境**；閘道跑在應用程式行程內，常駐系統匣。
+**桌面端**安裝後啟動即可，**無需安裝 Node 或任何其它執行環境**；閘道跑在應用程式行程內，常駐系統匣。
 
 1. 首次啟動即在應用程式行程內啟動本機閘道（連接埠 3065）並開啟主視窗；若偵測到舊版本的資料目錄或資料檔案，會彈窗提示遷移，依指引操作即可。
 2. 點「帳號」頁的「新增帳號」，選供應商後依彈窗提示完成登入或填寫憑證即可（方式以彈窗為準：網頁登入 / 手機驗證碼 / 貼上憑證 / 匯入本機登入狀態）。
@@ -46,11 +45,9 @@
 
 關閉視窗預設最小化到系統匣，閘道繼續在背景轉發；徹底結束請在系統匣圖示按右鍵選「結束」。
 
-> **macOS 首次開啟**：dmg 裡的應用程式未做 Apple 程式碼簽章與公證（簽章需要付費的 Apple Developer 帳號，見 `.github/workflows/build.yml` 的說明），Gatekeeper 會攔下首次啟動 —— 到「系統設定 → 隱私權與安全性」手動放行一次即可。
+> **macOS / Linux 桌面版**：本 fork 的 Release 只出 Windows 桌面端；自行編譯時請注意 —— macOS 的 dmg 未做 Apple 程式碼簽章與公證，Gatekeeper 會攔首次啟動（到「系統設定 → 隱私權與安全性」放行一次）；Linux 桌面端系統匣依賴 `libayatana-appindicator3`，AppImage 首次執行前需要可執行位（`chmod +x`）。
 >
-> **Linux 桌面端**：系統匣依賴 `libayatana-appindicator3`（多數桌面環境已內建）；若圖示不顯示，裝 `libayatana-appindicator3-1` 後重開即可。AppImage 首次執行前需要可執行位（`chmod +x`，程式在「開啟安裝包」時會自動補）。更新方式：deb 走系統安裝器（安裝時會問一次密碼），AppImage 是換檔案即升級。
->
-> **桌面端的差異**：AutoClaw 與智譜清言的「匯入本機登入狀態」只在 Windows 可用（讀的是 Windows 的 DPAPI 密文，macOS / Linux 上整段收起）；其餘家（小浣熊 / CatPaw / Cline）讀的是 `HOME` 下的明文檔案，三個平台都可用。系統匣、開機自動啟動、區域網路存取與網頁面板代管在 macOS / Linux 上同樣支援。
+> **桌面端的差異**：AutoClaw 與智譜清言的「匯入本機登入狀態」只在 Windows 可用（讀的是 Windows 的 DPAPI 密文，macOS / Linux 上整段收起）；其餘家（小浣熊 / CatPaw / Cline）讀的是 `HOME` 下的明文檔案，三個平台都可用。
 
 ## 伺服器端（Windows / Linux，無介面）
 
@@ -276,7 +273,7 @@ print(resp.choices[0].message.content)
 
 預設只監聽 `127.0.0.1`。開啟「設定 → 一般 → 區域網路存取」後改聽所有網路介面卡，區域網路裝置把 API 位址指向本機 IP 即可共用（介面會給出完整位址）。出於安全，開啟前必須註冊面板管理員：管理介面要求管理員工作階段或閘道 Key，無可用 Key 時轉發介面同樣拒絕服務（開啟流程會自動補一把「預設」Key）；也可選擇同時開放網頁面板（預設關閉）。變更重新啟動後生效。
 
-桌面端（Windows / macOS）安裝包裡就帶著網頁面板那一份 `ui/`，開啟「同時開放網頁管理面板」後區域網路裝置用瀏覽器存取同一網址即是管理介面 —— 與 Docker 版是同一份介面；**桌面視窗自己不走網頁登入**（沒有登入頁），它以本機第一把閘道 Key 作為憑證，開啟這個開關不需要你額外登入桌面端。網頁登入頁只在瀏覽器存取面板時出現。
+桌面端（Windows）安裝包裡就帶著網頁面板那一份 `ui/`，開啟「同時開放網頁管理面板」後區域網路裝置用瀏覽器存取同一網址即是管理介面 —— 與 Docker 版是同一份介面；**桌面視窗自己不走網頁登入**（沒有登入頁），它以本機第一把閘道 Key 作為憑證，開啟這個開關不需要你額外登入桌面端。網頁登入頁只在瀏覽器存取面板時出現。
 
 ## 手機端
 
@@ -292,7 +289,7 @@ print(resp.choices[0].message.content)
 
 ### 前置條件（按形態）
 
-**桌面端（Windows / macOS / Linux）**：兩個開關都要開，缺一不可。
+**桌面端（Windows）**：兩個開關都要開，缺一不可。
 
 1. 「設定 → 一般 → 區域網路存取」—— 允許區域網路裝置存取閘道。開啟流程會要求先註冊面板管理員，並自動補一把名為「預設」的 Key。
 2. 「設定 → 一般 → 區域網路存取 → 同時開放網頁管理面板」—— 託管 `ui/` 靜態目錄。**瀏覽器 / PWA 形態需要它**（`/m` 由閘道提供，開關關著時 404）；**APK / IPA 不需要**（介面在包裡），但仍然要第 1 項，否則閘道只監聽 `127.0.0.1`，手機連不上。

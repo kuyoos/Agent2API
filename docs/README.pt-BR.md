@@ -58,7 +58,7 @@ Três formas — escolha a que combina com o seu ambiente; **o guia completo de 
 
 | Forma | Artefato | Interface |
 | --- | --- | --- |
-| **Desktop** (Windows / macOS / Linux) | `Agent2API_<versão>_x64-setup.exe`, `_universal.dmg`, `_amd64.deb`, `_amd64.AppImage` | Janela do app |
+| **Desktop** (Windows) | `Agent2API_<versão>_x64-setup.exe` | Janela do app |
 | **Servidor** (Windows Server / Linux, sem GUI) | `agent2api-server-windows-amd64.zip`, `agent2api-server-linux-<arch>.tar.gz` | Painel no navegador |
 | **Docker** | `aimodcc/agent2api:latest` (amd64 / arm64) | Painel no navegador |
 
@@ -131,7 +131,7 @@ npm run build:icon         # Gera a imagem-fonte do ícone (rode após mudar o d
 
 O artefato de build é `target/release/bundle/nsis/Agent2API_<versão>_x64-setup.exe` (cerca de 8,6 MB na 3.0; o `src-tauri/.cargo/config.toml` aponta o `target-dir` do cargo para o `target/` na raiz do projeto).
 
-O `.dmg` do macOS **só pode ser compilado no macOS** (`npm --prefix desktop-tauri run build -- --target universal-apple-darwin`) — não há compilação cruzada a partir do Windows, então o artefato oficial sai do workflow `build` da CI (`macos-latest`, dois alvos mesclados). Os pacotes do desktop Linux saem do job `linux-desktop` do mesmo workflow (deb + AppImage); as imagens Docker e os pacotes de servidor usados na atualização dentro do contêiner saem do job `linux-server`, que reaproveita o caminho de compilação do Dockerfile, de modo que o executável dentro do pacote vem da mesma toolchain da imagem.
+A CI deste fork (`.github/workflows/build.yml`) **só produz o desktop Windows e os pacotes de servidor**: o instalador Windows sai do job `windows`; as imagens Docker e os pacotes de servidor usados na atualização dentro do contêiner saem do job `linux-server`, que reaproveita o caminho de compilação do Dockerfile, de modo que o executável dentro do pacote vem da mesma toolchain da imagem. O `.dmg` do macOS **só pode ser compilado no macOS** (`npm --prefix desktop-tauri run build -- --target universal-apple-darwin`) e os deb / AppImage do Linux exigem webkit2gtk / gtk3 — nenhum dos dois é publicado nos releases; compile no sistema correspondente se precisar.
 
 ## 📜 Aviso de uso
 

@@ -24,29 +24,34 @@ name: warm-cache
 #   · 手动 workflow_dispatch：⚠️ 必须在 Actions 页面选 main 分支
 #     触发 —— 缓存的作用域跟触发分支走，选了别的分支等于白跑
 #
-# ── job 名为什么必须与 build.yml 一致（macos / windows）───────
+# ── job 名为什么必须与 build.yml 一致（windows / windows-server）──
 # rust-cache 生成的缓存 key 里包含 job id（观察到的形如
-# v0-rust-macos-Darwin-arm64-<rustc 哈希>-<依赖哈希>），预热 job
+# v0-rust-windows-Windows-latest-X64-<rustc 哈希>-<依赖哈希>），预热 job
 # 一旦改名，正式构建算出的 key 就对不上，缓存存了也取不到。
 # rust-cache 的 workspaces 参数同理，两边必须逐字一致。
 #
+# 本 fork 只发 Windows 桌面端 + 服务端包（见 build.yml 文件头），故只预热
+# 这两个平台任务。macOS 的预热 job 随 dmg 一起移除 —— 它每次约 15 分钟，
+# 而现在已经没有任何 macOS 产物要构建。
+#
 # ── 预热到什么程度 ────────────────────────────────────────────
-# 桌面端 = cargo build --release，不跑 tauri build、不打 dmg/exe
-# 安装包（预热只关心 Rust 编译产物，打包工具不进 rust 缓存）。
-# 主 crate 的 custom-protocol 在 default features 里，feature 指纹
-# 与 tauri build 一致，预热后连主 crate 都能命中。macOS 按 universal
-# 的两个 target 各编一遍，与 build.yml 的产物位置一致：编译产物由
-# src-tauri/.cargo/config.toml 统一指向仓库根 target/，正是
-# rust-cache 缓存的目录。workspace 全成员（主 crate + server）都会
-# 编到，覆盖面比 tauri build 只编主 crate 更全。
+# 桌面端 = cargo build --release，不跑 tauri build、不打 exe 安装包
+# （预热只关心 Rust 编译产物，打包工具不进 rust 缓存）。主 crate 的
+# custom-protocol 在 default features 里，feature 指纹与 tauri build 一致，
+# 预热后连主 crate 都能命中。编译产物由 src-tauri/.cargo/config.toml 统一
+# 指向仓库根 target/，正是 rust-cache 缓存的目录。workspace 全成员（主 crate
+# + server）都会编到，覆盖面比 tauri build 只编主 crate 更全。
+#
+# 服务端 = 与 build.yml 的 windows-server job 逐字相同的 cargo 命令，
+# 好让正式构建命中这份缓存（server bin 的链接产物也能复用）。
 #
 # Docker = buildx 构建 --push=false，不推任何镜像，只攒 BuildKit
 # 的 gha 缓存（桩依赖层）。cache-from/cache-to 与 docker.yml 逐字
 # 一致（type=gha 默认 scope 相同），发版构建才能对上号。
 #
 # 免费额度说明：本仓库是公开仓库，GitHub-hosted runner 不计分钟，
-# 预热的冷启动开销（macOS 约 15 分钟）没有成本，只有等待它跑完的
-# 推送体验 —— 因此并发取消旧预热，避免排队。
+# 预热的冷启动开销没有成本，只有等待它跑完的推送体验 —— 因此并发取消
+# 旧预热，避免排队。
 
 on:
   push:
@@ -63,16 +68,13 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  # ── macOS（job 名与 build.yml 一致：macos）──────────────────
-  macos:
-    runs-on: macos-latest
+  # ── Windows 桌面端（job 名与 build.yml 一致：windows）────────
+  windows:
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
 
-      # universal 需要两个目标都装上（与 build.yml 一致）
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       # workspaces 与 build.yml 逐字一致，key 才能对上
       - uses: Swatinem/rust-cache@v2
@@ -81,16 +83,12 @@ jobs:
 
       # 无前端构建链（frontendDist 是仓库里的静态目录 ui/），直接
       # cargo 即可，不必装 node/npm —— 也因此预热比正式构建还快
-      - name: 预热 Rust 编译（aarch64）
-        run: cargo build --release --target aarch64-apple-darwin
+      - name: 预热 Rust 编译
+        run: cargo build --release
         working-directory: desktop-tauri/src-tauri
 
-      - name: 预热 Rust 编译（x86_64）
-        run: cargo build --release --target x86_64-apple-darwin
-        working-directory: desktop-tauri/src-tauri
-
-  # ── Windows（job 名与 build.yml 一致：windows）──────────────
-  windows:
+  # ── Windows 服务端（job 名与 build.yml 一致：windows-server）──
+  windows-server:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -101,8 +99,9 @@ jobs:
         with:
           workspaces: desktop-tauri/src-tauri -> ../../target
 
-      - name: 预热 Rust 编译
-        run: cargo build --release
+      # 与 build.yml 的 windows-server job 同一条命令
+      - name: 预热 Rust 编译（服务端 bin）
+        run: cargo build --release -p agent2api-server --bin agent2api-server
         working-directory: desktop-tauri/src-tauri
 
   # ── Docker 镜像缓存预热 ─────────────────────────────────────

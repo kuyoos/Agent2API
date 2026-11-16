@@ -58,7 +58,7 @@ Agent2API는 **AI 라우팅 게이트웨이와 Agent 클라이언트 설정 관�
 
 | 형태 | 산출물 | 인터페이스 |
 | --- | --- | --- |
-| **데스크톱**(Windows / macOS / Linux) | `Agent2API_<버전>_x64-setup.exe`, `_universal.dmg`, `_amd64.deb`, `_amd64.AppImage` | 앱 창 |
+| **데스크톱**(Windows) | `Agent2API_<버전>_x64-setup.exe` | 앱 창 |
 | **서버**(Windows Server / Linux, GUI 없음) | `agent2api-server-windows-amd64.zip`, `agent2api-server-linux-<arch>.tar.gz` | 브라우저 패널 |
 | **Docker** | `aimodcc/agent2api:latest`(amd64 / arm64) | 브라우저 패널 |
 
@@ -131,7 +131,7 @@ npm run build:icon         # 아이콘 소스 이미지 생성(아이콘 디자�
 
 패키징 산출물은 `target/release/bundle/nsis/Agent2API_<버전>_x64-setup.exe`(3.0 기준 약 8.6 MB. `src-tauri/.cargo/config.toml` 이 cargo 의 `target-dir` 을 프로젝트 루트의 `target/` 으로 지정합니다).
 
-macOS 의 `.dmg` 는 **macOS 에서만 빌드할 수 있습니다**(`npm --prefix desktop-tauri run build -- --target universal-apple-darwin`). Windows 에서 크로스 컴파일할 수 없어 공식 산출물은 CI 의 `build` 워크플로(macos-latest 에서 두 타깃을 병합)가 만듭니다. Linux 데스크톱 패키지는 같은 워크플로의 `linux-desktop` job 이 만들고(deb + AppImage), Docker 이미지와 컨테이너 내 업데이트에 쓰는 서버 패키지는 `linux-server` job 이 만듭니다. 후자는 Dockerfile 의 컴파일 경로를 재사용하므로 패키지 안의 실행 파일이 이미지와 동일한 도구 체인의 산출물입니다.
+본 fork 의 CI(`.github/workflows/build.yml`)는 **Windows 데스크톱과 서버 패키지만** 만듭니다. Windows 설치 프로그램은 `windows` job, Docker 이미지와 컨테이너 내 업데이트에 쓰는 서버 패키지는 `linux-server` job 이 만듭니다(후자는 Dockerfile 의 컴파일 경로를 재사용하므로 패키지 안의 실행 파일이 이미지와 동일한 도구 체인의 산출물입니다). macOS 의 `.dmg` 는 **macOS 에서만 빌드할 수 있고**(`npm --prefix desktop-tauri run build -- --target universal-apple-darwin`), Linux 의 deb / AppImage 는 webkit2gtk / gtk3 가 필요하므로 둘 다 Release 에 포함하지 않습니다. 필요하면 해당 플랫폼에서 직접 빌드하세요.
 
 ## 📜 사용 고지
 

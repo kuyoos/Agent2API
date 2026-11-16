@@ -1,6 +1,6 @@
 # Installation & Deployment
 
-This page is the complete install-and-operate guide for all three delivery forms: **desktop** (Windows / macOS / Linux), **server** (Windows / Linux, headless) and **Docker**. If you are not sure which one to pick, start with the table below.
+This page is the complete install-and-operate guide for all three delivery forms: **desktop** (Windows), **server** (Windows / Linux, headless) and **Docker**. If you are not sure which one to pick, start with the table below.
 
 Every form is managed from the **browser panel** afterwards (accounts, gateway keys, reports) — the panel shares the gateway's port; the desktop form additionally has an app window.
 
@@ -9,7 +9,7 @@ Every form is managed from the **browser panel** afterwards (accounts, gateway k
 ## Contents
 
 - [Which form to pick](#which-form-to-pick)
-- [Desktop (Windows / macOS / Linux)](#desktop-windows--macos--linux)
+- [Desktop (Windows)](#desktop-windows)
 - [Server (Windows / Linux, headless)](#server-windows--linux-headless)
 - [Docker](#docker)
 - [Verification and client setup](#verification-and-client-setup)
@@ -23,8 +23,7 @@ Releases ship the artifacts below; pick the row that matches your machine:
 | Form | Artifact | Interface | Notes |
 | --- | --- | --- | --- |
 | **Windows desktop** | `Agent2API_<version>_x64-setup.exe` | App window | NSIS installer, installs to `C:\\Program Files\Agent2API` by default, needs administrator approval |
-| **macOS desktop** | `Agent2API_<version>_universal.dmg` | App window | Universal binary (Apple Silicon and Intel each built, then merged); macOS 10.15+ |
-| **Linux desktop** | `Agent2API_<version>_amd64.deb` or `Agent2API_<version>_amd64.AppImage` | App window | deb installs system-wide (needs webkit2gtk-4.1 / gtk3); the AppImage is a single self-contained file that runs on any distro |
+| **macOS / Linux desktop** (build yourself) | `_universal.dmg` / `_amd64.deb` / `_amd64.AppImage` from source | App window | This fork's releases **ship Windows desktop plus the server packages only**; macOS / Linux desktop builds are not published, compile them per the "Development and build" section of the README |
 | **Windows server** (no GUI) | `agent2api-server-windows-amd64.zip` | **Browser panel** | Command-line install, registered as a Windows service — see [Server](#server-windows--linux-headless) |
 | **Linux server** (no GUI) | `agent2api-server-linux-<arch>.tar.gz` | **Browser panel** | Command-line install, run under systemd; the same package is also the in-container update payload |
 | **Docker** | `aimodcc/agent2api:latest` | **Browser panel** | amd64 / arm64 images — see [Docker](#docker) |
@@ -36,9 +35,9 @@ Releases ship the artifacts below; pick the row that matches your machine:
 > The desktop form needs a graphical session and **cannot be installed on a headless server**.
 > The server package links no WebView / GTK at all: one executable plus a `ui/` directory is everything it needs.
 
-## Desktop (Windows / macOS / Linux)
+## Desktop (Windows)
 
-**Desktop apps** (Windows / macOS / Linux) simply launch after installation — **no Node or any other runtime required**; the gateway runs inside the app process and stays in the tray.
+**Desktop app** simply launches after installation — **no Node or any other runtime required**; the gateway runs inside the app process and stays in the tray.
 
 1. First launch starts the local gateway (port 3065) inside the app process and opens the main window. If an older version's data directory or data files are found, a dialog walks you through the migration.
 2. Click "Add account" on the Accounts page, pick a provider and follow the dialog: sign in or fill in credentials (web login / SMS code / pasted credentials / importing this machine's desktop login state).
@@ -46,11 +45,9 @@ Releases ship the artifacts below; pick the row that matches your machine:
 
 Closing the window minimizes to the tray by default and the gateway keeps forwarding in the background; to quit for real, right-click the tray icon and choose "Exit".
 
-> **First launch on macOS**: the app inside the dmg is neither code-signed nor notarized (signing needs a paid Apple Developer account — see `.github/workflows/build.yml`), so Gatekeeper blocks the first launch. Allow it once under "System Settings → Privacy & Security" and it opens normally afterwards.
+> **macOS / Linux desktop builds**: this fork's releases ship the Windows desktop app only. When compiling yourself, note that the macOS dmg is neither code-signed nor notarized, so Gatekeeper blocks the first launch (allow it once under "System Settings → Privacy & Security"); the Linux tray needs `libayatana-appindicator3` and an AppImage needs the executable bit before its first run (`chmod +x`).
 >
-> **Linux desktop notes**: the tray needs `libayatana-appindicator3` (most desktops ship it; install `libayatana-appindicator3-1` if the tray icon does not appear, then restart). An AppImage needs the executable bit before its first run (`chmod +x`; the app sets it automatically when you pick "Open installer"). Updates: deb goes through the system installer (it asks for your password once), while an AppImage is upgraded by replacing the file.
->
-> **Desktop differences**: "import desktop login state" for AutoClaw and ChatGLM (智谱清言) is Windows-only (it reads Windows DPAPI ciphertext, so that section is hidden on macOS / Linux); the others (Raccoon / CatPaw / Cline) read plaintext files under `HOME` and work on all three platforms. Tray, launch-at-login, LAN access and web-panel hosting are supported on macOS / Linux too.
+> **Desktop differences**: "import desktop login state" for AutoClaw and ChatGLM (智谱清言) is Windows-only (it reads Windows DPAPI ciphertext, so that section is hidden on macOS / Linux); the others (Raccoon / CatPaw / Cline) read plaintext files under `HOME` and work on all three platforms.
 
 ## Server (Windows / Linux, headless)
 
@@ -260,7 +257,7 @@ print(resp.choices[0].message.content)
 
 By default the gateway only listens on `127.0.0.1`. After turning on "Settings → General → LAN access" it listens on all adapters, and devices on the LAN just point their API base URL at this machine's IP (the UI shows the full address) to share the accounts. For safety, enabling it requires registering a panel administrator first: the management API then demands an admin session or a gateway key, and with no key enabled the forwarding API refuses service too (the enable flow adds a "default" key automatically). The web panel can optionally be exposed to the LAN as well (off by default). Changes take effect after a restart.
 
-The desktop installers (Windows / macOS) already ship the web panel's `ui/` folder: once you turn on "expose the web management panel to the LAN" as well, devices on the LAN can open the same address in a browser to get the management UI — the same interface as the Docker form. **The desktop window itself never goes through web login** (there is no login page in the app): it authenticates with this machine's first gateway key, so flipping that switch never asks you to sign in from the desktop app. The web login page only appears when a browser opens the panel.
+The desktop installer (Windows) already ships the web panel's `ui/` folder: once you turn on "expose the web management panel to the LAN" as well, devices on the LAN can open the same address in a browser to get the management UI — the same interface as the Docker form. **The desktop window itself never goes through web login** (there is no login page in the app): it authenticates with this machine's first gateway key, so flipping that switch never asks you to sign in from the desktop app. The web login page only appears when a browser opens the panel.
 
 ## Mobile
 
@@ -276,7 +273,7 @@ All three run the same UI code. The difference is who serves the page: the PWA i
 
 ### Prerequisites (by form)
 
-**Desktop (Windows / macOS / Linux)**: both switches, one without the other will not work.
+**Desktop (Windows)**: both switches, one without the other will not work.
 
 1. "Settings → General → LAN access" — lets devices on the LAN reach the gateway. The enable flow asks you to register a panel administrator first and adds a key named "default" automatically.
 2. "Settings → General → LAN access → also expose the web management panel" — serves the `ui/` static folder. **Required for the browser / PWA form** (`/m` is served by the gateway, so it returns 404 while this switch is off). **The APK / IPA do not need it** (the UI is inside the package), but they still need switch 1 — otherwise the gateway only listens on `127.0.0.1` and the phone cannot reach it.

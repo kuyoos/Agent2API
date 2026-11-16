@@ -58,7 +58,7 @@ Three forms — pick the one that matches your setup; **the complete install, up
 
 | Form | Artifact | Interface |
 | --- | --- | --- |
-| **Desktop** (Windows / macOS / Linux) | `Agent2API_<version>_x64-setup.exe`, `_universal.dmg`, `_amd64.deb`, `_amd64.AppImage` | App window |
+| **Desktop** (Windows) | `Agent2API_<version>_x64-setup.exe` | App window |
 | **Server** (Windows Server / Linux, headless) | `agent2api-server-windows-amd64.zip`, `agent2api-server-linux-<arch>.tar.gz` | Browser panel |
 | **Docker** | `aimodcc/agent2api:latest` (amd64 / arm64) | Browser panel |
 
@@ -131,7 +131,7 @@ npm run build:icon         # Generate the icon source image (run after changing 
 
 The build artifact is `target/release/bundle/nsis/Agent2API_<version>_x64-setup.exe` (about 8.6 MB as of 3.0; `src-tauri/.cargo/config.toml` points cargo's `target-dir` at the project root's `target/`).
 
-The macOS `.dmg` **can only be built on macOS** (`npm --prefix desktop-tauri run build -- --target universal-apple-darwin`) — it cannot be cross-compiled from Windows, so the official artifact comes from the CI `build` workflow (`macos-latest`, two targets merged). Docker images and the server archives used for in-container updates come from the same workflow's `linux-server` job, which reuses the Dockerfile's compile path so the executable inside is built from the same toolchain as the image.
+This fork's CI (`.github/workflows/build.yml`) **ships the Windows desktop app and server packages only**: the Windows installer comes from the `windows` job; Docker images and the server archives used for in-container updates come from the `linux-server` job, which reuses the Dockerfile's compile path so the executable inside is built from the same toolchain as the image. The macOS `.dmg` **can only be built on macOS** (`npm --prefix desktop-tauri run build -- --target universal-apple-darwin`) and the Linux deb / AppImage need webkit2gtk / gtk3 — neither is published in releases, so build them on the matching platform if you need them.
 
 ## 📜 Usage Notice
 

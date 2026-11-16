@@ -18,19 +18,22 @@
 # 但没有人收到更新」。
 #
 # 做三件事：
-#   1. 下载构建工作流的产物 artifact（windows-nsis / macos-universal /
-#      linux-desktop / android-apk / ios-ipa，以及 linux-server-amd64 / -arm64
-#      两个容器内更新包）到 dist/；
+#   1. 下载构建工作流的产物 artifact（windows-nsis，以及 linux-server-amd64 /
+#      -arm64 与 windows-server-amd64 服务端包）到 dist/；
 #   2. 用 tag 所指提交的提交信息（= 更新日志，见 .agents/skills/release-flow/SKILL.md
 #      第 5 节）创建 / 更新 GitHub Release 并挂全部附件；
 #   3. 打印验收提示。
 #
+# ── 本 fork 只出 Windows 桌面端 + 服务端包 ────────────────────
+# macOS dmg 与 Linux 桌面端 deb / AppImage 已从 build.yml 移除（部署形态只需
+# Windows 桌面端 + 无 GUI 服务端，见该文件头）。本脚本同步只认这几类 artifact。
+#
 # ── artifact 与新老 tag 的关系 ──────────────────────────────────
 # 各类 artifact 都是分阶段加上的，老 tag 的 run 里可能缺：
 #   · linux-server-*（容器内一键更新，v3.0.4 起）
-#   · linux-desktop（Linux 桌面端 deb / AppImage，v3.0.9 起）
-#   · android-apk（手机端 APK）
-#   · ios-ipa（手机端 iOS 包，未签名 / 已签名两种都可能）
+#   · windows-server-amd64（Windows 服务端包）
+#   · （旧 tag 里仍会看到 macos-universal / linux-desktop / android-apk /
+#     ios-ipa —— 本脚本已不再挂这几类）
 # 缺任一类时脚本**只提醒、不中断** —— 历史 tag 仍可重跑收尾。
 #
 # 幂等可重跑：附件 `--clobber` 覆盖上传。
@@ -100,18 +103,18 @@ fi
 # ── 1. 定位 build run 并下载安装包 ────────────────────────────
 if [ -z "$RUN_ID" ]; then
   echo "→ 查找 $TAG 触发的 build 工作流…"
-  # 不按 run 整体 conclusion 过滤：只验「两个安装包 artifact 是否齐全」，
+  # 不按 run 整体 conclusion 过滤：只验「桌面端与服务端 artifact 是否齐全」，
   # 构建成功但别处失败的 run 里安装包照旧可用
   for id in $(GH_TOKEN="$BUILD_TOKEN" gh run list --workflow=build --repo "$BUILD_REPO" --limit 30 --json databaseId,headBranch \
       | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>{JSON.parse(s).filter(r=>r.headBranch===process.argv[1]).forEach(r=>process.stdout.write(r.databaseId+"\n"))})' "$TAG"); do
     if GH_TOKEN="$BUILD_TOKEN" gh api "repos/$BUILD_REPO/actions/runs/$id/artifacts" \
-         --jq 'any(.artifacts[].name; . == "macos-universal") and any(.artifacts[].name; . == "windows-nsis")' >/dev/null 2>&1; then
+         --jq 'any(.artifacts[].name; . == "windows-nsis") and any(.artifacts[].name; . == "linux-server-amd64")' >/dev/null 2>&1; then
       RUN_ID=$id
       break
     fi
   done
   [ -n "$RUN_ID" ] || {
-    echo "错误: 没找到 $TAG 的可用 build run（需 macos-universal 与 windows-nsis 两个 artifact 齐全）—— 先确认 CI 跑完（gh run list），或手动传 run-id" >&2
+    echo "错误: 没找到 $TAG 的可用 build run（需 windows-nsis 与 linux-server-amd64 两个 artifact 齐全）—— 先确认 CI 跑完（gh run list），或手动传 run-id" >&2
     exit 1
   }
 fi
@@ -120,39 +123,9 @@ echo "→ build run: $RUN_ID"
 rm -rf dist
 GH_TOKEN="$BUILD_TOKEN" gh run download "$RUN_ID" --repo "$BUILD_REPO" -D dist
 EXE=$(ls dist/windows-nsis/*.exe)
-DMG=$(ls dist/macos-universal/*.dmg)
-echo "→ 已下载 $(basename "$EXE") / $(basename "$DMG")"
+echo "→ 已下载 $(basename "$EXE")"
 
-ASSETS=("$EXE" "$DMG")
-
-# Linux 桌面端：deb 与 AppImage（build 工作流的 linux-desktop job 上传）。
-# 这一对是本功能上线后才有的 artifact —— 老 tag 的 run 里没有，提醒一句继续走
-# （与下面 linux-server 同一口径：历史 tag 仍可重跑收尾）。
-#
-# ⚠️ 用 find -maxdepth 2 而不是 `dist/linux-desktop/*` 直扫一层：上传侧的
-# path 写的是 `target/release/bundle/deb/*.deb` 与 `.../appimage/*.AppImage`，
-# upload-artifact 以两者的**最近公共祖先**（`target/release/bundle`）为包根，
-# 于是解出来的布局是 `linux-desktop/deb/…` 与 `linux-desktop/appimage/…` ——
-# 直扫一层什么也扫不到（2026-10-17 实测：Release 建出来了，却没有 deb/AppImage
-# 两个附件）。其余 artifact 的 path 都是 `dist/*`，包根即 dist，仍是平的。
-if [ -d dist/linux-desktop ]; then
-  LINUX_PKGS=()
-  while IFS= read -r file; do
-    LINUX_PKGS+=("$file")
-  done < <(find dist/linux-desktop -maxdepth 2 -type f \( -name '*.deb' -o -name '*.AppImage' \) | sort)
-  if [ ${#LINUX_PKGS[@]} -gt 0 ]; then
-    ASSETS+=("${LINUX_PKGS[@]}")
-    # 用 ${arr[*]##*/} 而不是 $(basename "${arr[@]}")：本机 Git Bash 的
-    # /usr/bin/basename 只认第一个操作数（POSIX 形态），传数组会把后几个
-    # 静默吞掉 —— 回显只剩 AppImage 时看着像「deb 没下载到」（2026-10-17 实测）
-    echo "→ 已下载 Linux 桌面端包: ${LINUX_PKGS[*]##*/}"
-  else
-    echo "⚠️  linux-desktop artifact 里没有 .deb / .AppImage —— Linux 用户将看不到可下载的安装包"
-  fi
-else
-  echo "⚠️  这个 run 里没有 linux-desktop 产物（Linux 桌面端上线前的 tag？）——"
-  echo "    Release 将不含 Linux 桌面安装包，Linux 面板的「下载并安装」会被藏起"
-fi
+ASSETS=("$EXE")
 
 # 容器内更新包 / 裸机安装包：两个架构的 tar.gz + 同名 .sha256（面板按名找
 # 校验文件，缺了会拒绝安装）。老 tag 的 run 没有这两个 artifact —— 提醒一句继续走。
@@ -290,18 +263,13 @@ if [ "$PRERELEASE" = true ]; then
 else
   echo "  [2] Docker Hub:      https://hub.docker.com/r/aimodcc/agent2api/tags （$TAG 版本号 + latest）"
 fi
-echo "  [3] 安装包「关于」页版本号与 $TAG 一致（Windows exe / macOS dmg / Linux deb+AppImage）"
-echo "  [4] Linux 桌面端：Release 里 .deb 与 .AppImage 都在；在 Linux 上装 deb（或"
-echo "      直接运行 AppImage）后，面板「设置 → 软件更新」能检查到下一版并给出安装入口"
-echo "  [5] 容器内更新：面板「设置 → 软件更新」出现「下载并更新」，且 Release 里"
+echo "  [3] Windows 安装包「关于」页版本号与 $TAG 一致"
+echo "  [4] 容器内更新：面板「设置 → 软件更新」出现「下载并更新」，且 Release 里"
 echo "      agent2api-server-linux-{amd64,arm64}.tar.gz 与各自的 .sha256 都在"
-echo "  [6] 服务端包（无 GUI）：Release 里还有 windows-server-amd64.zip（含 .sha256）。"
+echo "  [5] 服务端包（无 GUI）：Release 里还有 windows-server-amd64.zip（含 .sha256）。"
 echo "      两个平台的包解包后都应看到安装脚本 —— Linux: install.sh / agent2api.service"
 echo "      / agent2api.env.example；Windows: install-service.ps1"
-echo "  [7] 手机端：Release 里有 Agent2API-${TAG#v}.apk 与 .sha256；装到 Android 上"
-echo "      能启动、能添加网关并登录（版本号看系统「应用信息」页，手机端界面不显示）"
-echo "  [8] iOS：Release 里有 Agent2API-${TAG#v}.ipa 与 .sha256；未签名包需用"
-echo "      AltStore / SideStore 重签后安装，已签名包可直接走 TestFlight / 描述文件"
+echo "  [6] 附件总数应为 7（Windows exe + linux-server 两份包各带 .sha256 + windows-server zip 与 .sha256）"
 if [ "$PRERELEASE" = true ]; then
   echo "  [9] Docker 镜像：只出 $TAG 那个版本 tag（beta tag 不移动 :latest）"
 fi
