@@ -236,8 +236,11 @@ fn start_asset(
         active: true,
         version: asset.version.clone(),
         required: matches!(policy, InstallPolicy::Required { .. }),
+        // 与 `compatibility::minimum_version` 同源：那里按插件协议代际判，
+        // 这里若仍写网关版本，`update_for` 会因 `requiredVersion` 对不上而
+        // 找不到这条任务（界面就不显示补齐进度与错误）。
         required_version: matches!(policy, InstallPolicy::Required { .. })
-            .then(|| crate::server::core::update::CURRENT_VERSION.to_string()),
+            .then(|| super::compatibility::MIN_PLUGIN_VERSION.to_string()),
         updated_at: logging::now_ms(),
         ..Default::default()
     };
