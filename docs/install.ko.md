@@ -158,7 +158,7 @@ Linux 에서는 `/etc/agent2api/agent2api.env` 에, Windows 에서는 서비스 
 
 이미지는 GitHub Container Registry `ghcr.io/kuyoos/agent2api`에 게시됩니다. 정식 `v*` 태그를 push하면 `<버전>`과 `latest`, beta 태그면 `<버전>`과 롤링 `beta`가 나오며 **`latest`는 움직이지 않습니다**. 수동 실행 빌드는 `dev`만 업데이트합니다. `3.5.1` 같은 전체 버전 번호로 고정할 수도 있습니다. beta를 사용하려면 아래 명령이나 Compose 설정의 `:latest`를 `:beta`로 바꾸고, 업데이트할 때 `docker compose pull && docker compose up -d`를 실행하세요.
 
-> 업스트림 `aimodcc/agent2api`에는 **본 fork의 빌드가 없습니다**(업스트림 최신은 3.5.0-beta.1까지). 섞어 쓰지 마세요. GHCR의 새 패키지는 **기본이 비공개**입니다. `docker pull`이 401을 반환하면 저장소의 Packages 페이지에서 해당 패키지를 Public으로 바꾸세요.
+> 업스트림 `aimodcc/agent2api`에는 **본 fork의 빌드가 없습니다**(업스트림 최신은 3.5.0-beta.1까지). 섞어 쓰지 마세요. 이 저장소의 GHCR 패키지는 **공개로 설정되어 있습니다**(익명 pull 가능). 만약 401이 반환되면 저장소의 Packages 페이지에서 해당 패키지를 Public으로 바꾸세요.
 
 ```bash
 docker run -d --name agent2api --restart unless-stopped \

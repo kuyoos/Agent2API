@@ -158,7 +158,7 @@ Linux では `/etc/agent2api/agent2api.env` に、Windows ではサービスの�
 
 イメージは GitHub Container Registry の `ghcr.io/kuyoos/agent2api` に公開しています。正式版の `v*` タグを push すると `<バージョン>` と `latest`、beta タグなら `<バージョン>` とローリング `beta` が出て、**`latest` は動きません**。手動実行のビルドは `dev` のみ更新します。`3.5.1` のような完全なバージョン番号で固定することもできます。beta を使うには、以下のコマンドまたは Compose 設定の `:latest` を `:beta` に変更し、更新時は `docker compose pull && docker compose up -d` を実行してください。
 
-> 上流の `aimodcc/agent2api` には**本 fork のビルドはありません**（上流の最新は 3.5.0-beta.1 まで）。混在させないでください。GHCR の新しいパッケージは**既定で非公開**です。`docker pull` が 401 を返す場合は、リポジトリの Packages ページでそのパッケージを Public に変更してください。
+> 上流の `aimodcc/agent2api` には**本 fork のビルドはありません**（上流の最新は 3.5.0-beta.1 まで）。混在させないでください。本リポジトリの GHCR パッケージは**公開済み**です（匿名 pull 可能）。万一 401 が返る場合は、リポジトリの Packages ページでそのパッケージを Public に変更してください。
 
 ```bash
 docker run -d --name agent2api --restart unless-stopped \

@@ -158,7 +158,7 @@ No Linux coloque-as em `/etc/agent2api/agent2api.env`; no Windows edite a chave 
 
 As imagens são publicadas no GitHub Container Registry como `ghcr.io/kuyoos/agent2api`: um tag estável `v*` produz `<versão>` e `latest`; um tag beta produz `<versão>` e `beta` rolante e **nunca move `latest`**; builds acionados manualmente atualizam apenas `dev`. Use uma versão completa, como `3.5.1`, para fixá-la. Para usar beta, troque `:latest` por `:beta` no comando ou na configuração do Compose abaixo; atualize com `docker compose pull && docker compose up -d`.
 
-> O `aimodcc/agent2api` do upstream **não tem build deste fork** (para no upstream 3.5.0-beta.1) — não misture. Pacotes novos no GHCR são **privados por padrão**; se `docker pull` retornar 401, mude o pacote para Public na página de Packages do repositório.
+> O `aimodcc/agent2api` do upstream **não tem build deste fork** (para no upstream 3.5.0-beta.1) — não misture. O pacote GHCR deste repositório **já é público** (pulls anônimos funcionam); se algum dia retornar 401, mude o pacote para Public na página de Packages do repositório.
 
 ```bash
 docker run -d --name agent2api --restart unless-stopped \

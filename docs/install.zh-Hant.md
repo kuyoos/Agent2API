@@ -174,7 +174,7 @@ Linux 寫在 `/etc/agent2api/agent2api.env`；Windows 改服務登錄檔的
 
 映像發布在 GitHub Container Registry `ghcr.io/kuyoos/agent2api`：推 `v*` 正式版 tag 出 `<版本號>` 與 `latest`；beta tag 出 `<版本號>` 與滾動 `beta`，**不改動 `latest`**；手動觸發的建置只更新 `dev`。也可使用完整版本號（例如 `3.5.1`）固定。要使用 beta，把下方命令或 Compose 設定裡的 `:latest` 改成 `:beta`；更新時執行 `docker compose pull && docker compose up -d`。
 
-> 上游 `aimodcc/agent2api` 裡**沒有本 fork 的版本**（最新只到上游 3.5.0-beta.1），別混用。GHCR 的新包**預設私有**，`docker pull` 報 401 時到儲存庫的 Packages 頁把該包改成 Public。
+> 上游 `aimodcc/agent2api` 裡**沒有本 fork 的版本**（最新只到上游 3.5.0-beta.1），別混用。本儲存庫的 GHCR 包**已設為公開**（可匿名拉取）；萬一遇到 401，到儲存庫的 Packages 頁把該包改成 Public。
 
 ```bash
 docker run -d --name agent2api --restart unless-stopped \
