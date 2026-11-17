@@ -190,19 +190,35 @@ fn stateful_quota_bookkeeping_ignores_non_quota_classes() {
 
 #[test]
 fn codearts_daily_pool_envelope_cools_to_the_boundary_instead_of_ten_minutes() {
-    use crate::server::errors::GatewayError;
-
+    // ── 为什么这条用例不再叫真实适配器 ──────────────────────────────
+    //
+    // 原写法是 `adapter_for(ProviderKind::CodeArts).classify_conversation_error(...)`，
+    // 断言 CodeArts 自己的 `daily_pool_reset_at` 能把 InferHub.4291.200 认成
+    // 「下一个北京零点」。3.3.0 把各家适配器整体搬进插件后，网关内核的
+    // `adapter_for` 对任何 kind 都只返回「未装插件」占位实现（默认分类即
+    // `Fatal`），那条断言在本仓库里已经无法成立 —— 它守的实现不在这个仓库了。
+    // 在此之前 CI 的 verify 只跑 `cargo check`，这条用例一直被跳过，所以静默红着。
+    //
+    // 留在本仓库且仍然成立的是**记账契约**：分类结果若给了 `reset_at`，落库
+    // 必须逐字是它（这正是本次要防的缺陷形状 —— 曾经 destructure 用 `..`
+    // 跳过 `reset_at`、写死 `None`，让日池耗尽退化成 10 分钟兜底）。适配器是否
+    // 能算出零点由插件仓库自己的测试守。
     let (_dir, service, id) = temp_service();
-    // 生产库里那条真实文案（HTTP 200 的 SSE 里折出 403，首包门送进会话式分支）
-    let error = GatewayError::with_status(403, "上游报告 InferHub.4291.200：insufficient quota");
-    let class = adapter_for(ProviderKind::CodeArts).classify_conversation_error(&error);
-    let UpstreamErrorClass::QuotaLimited { reset_at: Some(reset_at), .. } = &class else {
-        panic!("福利池耗尽的文案应分类为带恢复时刻的 QuotaLimited，实际 {class:?}");
+    // 生产里那条真实文案（HTTP 200 的 SSE 里折出 403，首包门送进会话式分支）：
+    // 文案本身保留，确保记账路径吃的仍是这一形状的 message。
+    let message = "上游报告 InferHub.4291.200：insufficient quota";
+    // 适配器算出的日池重置点：下一个北京零点。这里直接给出，验证记账侧不改写它。
+    let reset_at = next_beijing_midnight_ms();
+    let class = UpstreamErrorClass::QuotaLimited {
+        reset_at: Some(reset_at),
+        message: message.to_string(),
+        upstream_code: Some(4291200),
+        status: 403,
     };
-    mark_conversation_limited(&service, &id, &single("glm-5.3-flash"), &class, &error.message);
+    mark_conversation_limited(&service, &id, &single("glm-5.3-flash"), &class, message);
 
     let stored = rotate::account_limit_reset_at(&service, &id, "glm-5.3-flash");
-    assert_eq!(stored, *reset_at, "落库的恢复时刻必须是适配器算出的日池重置点");
+    assert_eq!(stored, reset_at, "落库的恢复时刻必须是分类结果给的日池重置点");
     // ── 断言「是下一个北京零点」，而不是「距现在 > 10 分钟」（2026-10-13 修）──
     //
     // 原断言写的是 `minutes > 10`，本意是「不是 10 分钟兜底常量」；但它有个
@@ -227,6 +243,31 @@ fn codearts_daily_pool_envelope_cools_to_the_boundary_instead_of_ten_minutes() {
         "恢复时刻必须是北京零点（日池按天重置），实际 {}",
         at.format("%Y-%m-%d %H:%M:%S")
     );
+}
+
+/// 下一个北京零点（毫秒）。
+///
+/// 时区取项目自己的 `beijing::offset()`，只在这里做一次「次日 00:00」的日期
+/// 推进 —— 原实现（随适配器搬去插件仓库的 `welfare::next_day_boundary_ms`）
+/// 就是这个语义，测试不该另造一套时区常量。
+fn next_beijing_midnight_ms() -> i64 {
+    use chrono::{TimeZone as _, Utc};
+
+    let offset = crate::server::core::beijing::offset();
+    let now = Utc
+        .timestamp_millis_opt(logging::now_ms())
+        .single()
+        .expect("合法时间戳")
+        .with_timezone(&offset);
+    let tomorrow = (now + chrono::Duration::days(1)).date_naive();
+    // 北京没有夏令时：把「次日 00:00」当作固定偏移下的本地时间换算成 UTC 时间戳，
+    // 与 `auto_checkin.rs` / `errors.rs` 里的同一写法（`from_local_datetime`）。
+    let local = tomorrow.and_hms_opt(0, 0, 0).expect("零点一定合法");
+    offset
+        .from_local_datetime(&local)
+        .single()
+        .expect("北京零点唯一")
+        .timestamp_millis()
 }
 
 #[test]
