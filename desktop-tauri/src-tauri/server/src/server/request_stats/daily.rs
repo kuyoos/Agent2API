@@ -26,7 +26,7 @@ use super::source::{ApiKeyAccum, ClientAccum};
 /// 依赖它；不写 `SELECT *` 的理由同 `sql::REQUEST_COLUMNS`）
 const DAILY_COLUMNS: &str = "date, requests, successful, tokens, cache_hit_tokens, \
      cache_input_tokens, model_tokens, provider_stats, account_stats, client_stats, api_key_stats, \
-     source_stats_version, credit, credit_rows";
+     source_stats_version, credit, credit_rows, credit_estimated, credit_estimated_rows";
 
 /// JSON 数组列 → `Vec<T>`。解析失败或内容不是数组时退化成空表。
 ///
@@ -65,6 +65,9 @@ fn decode_daily(row: &rusqlite::Row<'_>) -> rusqlite::Result<DailyEntry> {
         // 「这一天没有积分读数」，与全新的空库同一形态（见 `V25_SCHEMA`）
         credit: row.get(12)?,
         credit_rows: row.get(13)?,
+        // 两列在 v26 才出现：更早的库读到 NULL / 0，语义正是「没有估算值」
+        credit_estimated: row.get(14)?,
+        credit_estimated_rows: row.get(15)?,
     })
 }
 
@@ -107,8 +110,8 @@ pub(super) fn upsert_daily(conn: &Connection, day: &DailyEntry) -> rusqlite::Res
     conn.execute(
         "INSERT INTO request_daily (date, requests, successful, tokens, cache_hit_tokens, \
          cache_input_tokens, model_tokens, provider_stats, account_stats, client_stats, api_key_stats, \
-         source_stats_version, credit, credit_rows) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14) \
+         source_stats_version, credit, credit_rows, credit_estimated, credit_estimated_rows) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16) \
          ON CONFLICT(date) DO UPDATE SET requests = excluded.requests, \
          successful = excluded.successful, tokens = excluded.tokens, \
          cache_hit_tokens = excluded.cache_hit_tokens, \
@@ -116,7 +119,9 @@ pub(super) fn upsert_daily(conn: &Connection, day: &DailyEntry) -> rusqlite::Res
          model_tokens = excluded.model_tokens, provider_stats = excluded.provider_stats, \
          account_stats = excluded.account_stats, client_stats = excluded.client_stats, \
          api_key_stats = excluded.api_key_stats, source_stats_version = excluded.source_stats_version, \
-         credit = excluded.credit, credit_rows = excluded.credit_rows",
+         credit = excluded.credit, credit_rows = excluded.credit_rows, \
+         credit_estimated = excluded.credit_estimated, \
+         credit_estimated_rows = excluded.credit_estimated_rows",
         params![
             day.date,
             day.requests,
@@ -132,6 +137,8 @@ pub(super) fn upsert_daily(conn: &Connection, day: &DailyEntry) -> rusqlite::Res
             day.source_stats_version,
             day.credit,
             day.credit_rows,
+            day.credit_estimated,
+            day.credit_estimated_rows,
         ],
     )?;
     Ok(())

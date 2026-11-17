@@ -107,7 +107,9 @@ export function CreditTooltip(props: ChartTooltipProps) {
     <ChartTooltip {...props}>
       <div className='report-chart-tooltip-title'>{dayLabel(row.date)}</div>
       <TooltipRow name={t('积分消耗')} value={
-        <b className='report-chart-tooltip-value'>{row.credit === null ? '—' : formatCredit(row.credit)}</b>
+        <b className='report-chart-tooltip-value'>
+          {row.credit === null ? '—' : `${row.creditEstimatedRows > 0 ? '≈ ' : ''}${formatCredit(row.credit)}`}
+        </b>
       } />
       <TooltipRow name={t('每百万 Token 积分')} value={
         <b className='report-chart-tooltip-value'>{row.ppm === null ? '—' : formatCreditRate(row.ppm)}</b>
@@ -115,6 +117,11 @@ export function CreditTooltip(props: ChartTooltipProps) {
       <TooltipRow name={t('总 Token')} value={<TokenValue value={row.tokens} />} />
       <TooltipRow name={t('总请求数')} value={<b className='report-chart-tooltip-value'>{formatInt(row.requests)}</b>} />
       {row.credit === null ? <div className='report-chart-tooltip-sub'>{t('这天没有积分读数')}</div> : null}
+      {row.creditEstimatedRows > 0 ? (
+        <div className='report-chart-tooltip-sub'>
+          {t('其中 {n} 条按余额差估算', { n: formatInt(row.creditEstimatedRows) })}
+        </div>
+      ) : null}
     </ChartTooltip>
   )
 }

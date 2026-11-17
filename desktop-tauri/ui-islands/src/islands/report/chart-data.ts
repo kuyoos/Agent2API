@@ -18,6 +18,9 @@ export type CreditTrendRow = {
   date: string
   /** `null` = 这天没有任何积分读数（折线在这里留断点，不画成 0） */
   credit: number | null
+  /** 这天的合计里有多少来自余额差估算（`0` = 全部是上游直报） */
+  creditEstimated: number
+  creditEstimatedRows: number
   /** `null` = 算不出单价（没有积分或没有用量） */
   ppm: number | null
   tokens: number
@@ -103,9 +106,14 @@ export function creditTrendData(series: StatsDay[]): CreditTrendRow[] {
   return (Array.isArray(series) ? series : []).map(day => {
     const credit = day?.credit === null || day?.credit === undefined ? Number.NaN : Number(day.credit)
     const ppm = day?.ppm === null || day?.ppm === undefined ? Number.NaN : Number(day.ppm)
+    const estimated = day?.creditEstimated === null || day?.creditEstimated === undefined
+      ? 0
+      : Number(day.creditEstimated)
     return {
       date: String(day?.date || ''),
       credit: Number.isFinite(credit) ? credit : null,
+      creditEstimated: Number.isFinite(estimated) ? estimated : 0,
+      creditEstimatedRows: amount(day?.creditEstimatedRows),
       ppm: Number.isFinite(ppm) ? ppm : null,
       tokens: amount(day?.tokens),
       requests: amount(day?.requests),

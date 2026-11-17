@@ -25,6 +25,7 @@ use std::collections::BTreeMap;
 use super::record::{DailyEntry, RequestEntry};
 use super::report::{push_account_accum, push_model_accum, push_provider_accum};
 use super::daily;
+use super::source_report::{merge_api_key, merge_client};
 use super::{backfill, sql};
 
 /// 逐行解析明细旧文件（`requests.jsonl`），坏行跳过。
@@ -81,6 +82,29 @@ pub(crate) fn parse_daily_jsonl(text: &str) -> BTreeMap<String, DailyEntry> {
                     existing.credit = Some(existing.credit.unwrap_or(0.0) + value);
                 }
                 existing.credit_rows += item.credit_rows;
+                // 估算两列与直报同理（schema v26）：漏了这一行，同一天的第二份
+                // 文件会把估算值整段吞掉，而 `credit` 里已经含了它 —— 报表的
+                // 「合计」与「其中多少是估算」当场对不上
+                if let Some(value) = item.credit_estimated {
+                    existing.credit_estimated =
+                        Some(existing.credit_estimated.unwrap_or(0.0) + value);
+                }
+                existing.credit_estimated_rows += item.credit_estimated_rows;
+                // 来源维度（client / apiKey）与版本号：首行整条插入时它们还在，
+                // 第二行起不合并就等于静默丢掉这一天的客户端与 Key 分解
+                existing.source_stats_version =
+                    existing.source_stats_version.max(item.source_stats_version);
+                for acc in item.client_stats {
+                    merge_client(
+                        &mut existing.client_stats,
+                        &acc.client,
+                        &acc.label,
+                        &acc.usage,
+                    );
+                }
+                for acc in item.api_key_stats {
+                    merge_api_key(&mut existing.api_key_stats, &acc);
+                }
                 for acc in item.model_tokens {
                     push_model_accum(
                         &mut existing.model_tokens,
@@ -88,6 +112,9 @@ pub(crate) fn parse_daily_jsonl(text: &str) -> BTreeMap<String, DailyEntry> {
                         acc.tokens,
                         acc.requests,
                         acc.credit,
+                        acc.credit_rows,
+                        acc.credit_estimated,
+                        acc.credit_estimated_rows,
                     );
                 }
                 // provider 维度同理逐行合并（同一天多行时两组都要合上，
@@ -101,6 +128,8 @@ pub(crate) fn parse_daily_jsonl(text: &str) -> BTreeMap<String, DailyEntry> {
                         acc.tokens,
                         acc.credit,
                         acc.credit_rows,
+                        acc.credit_estimated,
+                        acc.credit_estimated_rows,
                     );
                 }
                 // 账号维度同理（理由与 provider 那条一致：合并要不全做、要不全不做）
@@ -114,6 +143,8 @@ pub(crate) fn parse_daily_jsonl(text: &str) -> BTreeMap<String, DailyEntry> {
                         acc.tokens,
                         acc.credit,
                         acc.credit_rows,
+                        acc.credit_estimated,
+                        acc.credit_estimated_rows,
                     );
                 }
             }

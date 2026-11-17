@@ -161,6 +161,10 @@ pub async fn run_upgrade(State(state): State<ServerState>) -> Response {
             // 积分聚合（schema v25）：导入的旧聚合行同样没有这两列，
             // 与上面两条同一时机补算（见 `backfill_credit_once`）
             request_stats.backfill_credit_once();
+            // 余额差估算（schema v26）：导入后的旧请求与旧余额快照都在这里才齐，
+            // 补算一轮把「导入前已发生的区间」补上（常驻循环只处理未来变化）。
+            // 与上面三条同一安全边界：估算内部对「明细不足」的日子会跳过。
+            request_stats.settle_credit_estimates();
             request_stats.prune();
             if let Some(logs) = logging::store_ref() {
                 logs.prune();

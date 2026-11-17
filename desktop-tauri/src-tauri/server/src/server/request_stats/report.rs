@@ -165,8 +165,12 @@ pub(super) struct RangeTotals {
     /// `DailyEntry::credit`）。逐天累加而不是从三张维度表求和：维度表里的
     /// 组可能被手改的库改坏，日总量才是明细折算的权威投影。
     pub credit: Option<f64>,
-    /// 区间内**上报了积分**的请求条数（覆盖度的分子）
+    /// 区间内**上游直报了积分**的请求条数（覆盖度的分子；估算行不计）
     pub credit_rows: i64,
+    /// 区间内由余额差估算出来的积分之和（`None` = 这段时间没有估算值）
+    pub credit_estimated: Option<f64>,
+    /// 区间内**由余额差估算**的请求条数（与 `credit_rows` 互斥）
+    pub credit_estimated_rows: i64,
     /// 区间内的输入 token 之和（`prompt_tokens`，即 `cache_input_tokens` 那一列）。
     /// 积分单价（每百万输入 token）的分母；`tokens` 是另一档口径的分母。
     pub input_tokens: i64,
@@ -189,6 +193,8 @@ pub(super) fn range_totals(
         active_days: 0,
         credit: None,
         credit_rows: 0,
+        credit_estimated: None,
+        credit_estimated_rows: 0,
         input_tokens: 0,
         model_totals: Vec::new(),
         provider_totals: Vec::new(),
@@ -203,6 +209,8 @@ pub(super) fn range_totals(
         totals.tokens += day.tokens;
         total_credit(&mut totals.credit, day.credit);
         totals.credit_rows += day.credit_rows;
+        total_credit(&mut totals.credit_estimated, day.credit_estimated);
+        totals.credit_estimated_rows += day.credit_estimated_rows;
         totals.input_tokens += day.cache_input_tokens;
         // activeDays 只数**区间内**有请求的天数（补零的日子不算「活跃」）
         if day.requests > 0 {
@@ -215,6 +223,9 @@ pub(super) fn range_totals(
                 acc.tokens,
                 acc.requests,
                 acc.credit,
+                acc.credit_rows,
+                acc.credit_estimated,
+                acc.credit_estimated_rows,
             );
         }
         for acc in &day.provider_stats {
@@ -226,6 +237,8 @@ pub(super) fn range_totals(
                 acc.tokens,
                 acc.credit,
                 acc.credit_rows,
+                acc.credit_estimated,
+                acc.credit_estimated_rows,
             );
         }
         for acc in &day.account_stats {
@@ -238,6 +251,8 @@ pub(super) fn range_totals(
                 acc.tokens,
                 acc.credit,
                 acc.credit_rows,
+                acc.credit_estimated,
+                acc.credit_estimated_rows,
             );
         }
     }
@@ -264,6 +279,39 @@ pub(super) fn range_totals(
     } else {
         None
     };
+    // 估算部分同理单算一份余量：`credit` 现在是「直报 + 估算」的合计，
+    // 只减直报那一半会把估算值重复记进未知组。
+    let covered_estimated: f64 = totals
+        .provider_totals
+        .iter()
+        .filter_map(|item| item.credit_estimated)
+        .sum();
+    let covered_estimated_rows: i64 = totals
+        .provider_totals
+        .iter()
+        .map(|item| item.credit_estimated_rows)
+        .sum();
+    let rest_estimated_rows_candidate =
+        (totals.credit_estimated_rows - covered_estimated_rows).max(0);
+    // 只剩「差值」可判：差值 <= 0 时说明维度表已经把估算值**全部分走**
+    // （手改过库、或拆分比总量还多），这时条数余量也一并归零 —— 否则会产出
+    // 一组「有 N 条估算、估算值是 Some(0.0)」的未知承载者，界面给它加 `≈`
+    // 却显示 0，读起来像「估出来确实是 0」。
+    //
+    // 反向也要求成立：差值 > 0 但条数余量为 0（维度表给出的值比总量还大，
+    // 只是恰好没超出条数）同样不建组 —— 一个「有值没条数」的组只会让
+    // `creditRows + creditEstimatedRows` 与请求数对不上。两条都要过，才建组。
+    let (rest_estimated, rest_estimated_rows) = match totals.credit_estimated {
+        Some(total) if rest_estimated_rows_candidate > 0 => {
+            let rest = total - covered_estimated;
+            if rest > 0.0 {
+                (Some(rest), rest_estimated_rows_candidate)
+            } else {
+                (None, 0)
+            }
+        }
+        _ => (None, 0),
+    };
     // `max(0)` 兜住手改文件造成的「拆分比总量还多」；余量全零时这里仍会建出
     // 一个空组，但 `build_providers` 会把全零的组滤掉（见那边的 `requests > 0
     // || tokens > 0`），所以不会凭空冒出空的「未知」项
@@ -275,6 +323,8 @@ pub(super) fn range_totals(
         (totals.tokens - covered_tokens).max(0),
         rest_credit,
         rest_credit_rows,
+        rest_estimated,
+        rest_estimated_rows,
     );
 
     // ── 账号维度同理 ────────────────────────────────────────────
@@ -293,6 +343,31 @@ pub(super) fn range_totals(
     } else {
         None
     };
+    let covered_estimated: f64 = totals
+        .account_totals
+        .iter()
+        .filter_map(|item| item.credit_estimated)
+        .sum();
+    let covered_estimated_rows: i64 = totals
+        .account_totals
+        .iter()
+        .map(|item| item.credit_estimated_rows)
+        .sum();
+    // 与 provider 那段同一判据（见上面的长注释）：差值 <= 0 时连条数一起归零，
+    // 差值 > 0 但条数为 0 时同样不建组（值与条数必须同进退）
+    let rest_estimated_rows_candidate =
+        (totals.credit_estimated_rows - covered_estimated_rows).max(0);
+    let (rest_estimated, rest_estimated_rows) = match totals.credit_estimated {
+        Some(total) if rest_estimated_rows_candidate > 0 => {
+            let rest = total - covered_estimated;
+            if rest > 0.0 {
+                (Some(rest), rest_estimated_rows_candidate)
+            } else {
+                (None, 0)
+            }
+        }
+        _ => (None, 0),
+    };
     push_account_accum(
         &mut totals.account_totals,
         "",
@@ -302,6 +377,8 @@ pub(super) fn range_totals(
         (totals.tokens - covered_tokens).max(0),
         rest_credit,
         rest_credit_rows,
+        rest_estimated,
+        rest_estimated_rows,
     );
     totals
 }
@@ -314,18 +391,27 @@ pub(super) fn push_model_accum(
     tokens: i64,
     requests: i64,
     credit: Option<f64>,
+    credit_rows: i64,
+    credit_estimated: Option<f64>,
+    credit_estimated_rows: i64,
 ) {
     match list.iter_mut().find(|item| item.model == model) {
         Some(item) => {
             item.tokens += tokens;
             item.requests += requests;
             add_credit(&mut item.credit, credit);
+            item.credit_rows += credit_rows;
+            add_credit(&mut item.credit_estimated, credit_estimated);
+            item.credit_estimated_rows += credit_estimated_rows;
         }
         None => list.push(ModelAccum {
             model: model.to_string(),
             requests,
             tokens,
             credit,
+            credit_rows,
+            credit_estimated,
+            credit_estimated_rows,
         }),
     }
 }
@@ -437,6 +523,8 @@ pub(super) fn push_provider_accum(
     tokens: i64,
     credit: Option<f64>,
     credit_rows: i64,
+    credit_estimated: Option<f64>,
+    credit_estimated_rows: i64,
 ) {
     match list.iter_mut().find(|item| item.provider == provider) {
         Some(item) => {
@@ -445,6 +533,8 @@ pub(super) fn push_provider_accum(
             item.tokens += tokens;
             add_credit(&mut item.credit, credit);
             item.credit_rows += credit_rows;
+            add_credit(&mut item.credit_estimated, credit_estimated);
+            item.credit_estimated_rows += credit_estimated_rows;
         }
         None => list.push(ProviderAccum {
             provider: provider.to_string(),
@@ -453,6 +543,8 @@ pub(super) fn push_provider_accum(
             tokens,
             credit,
             credit_rows,
+            credit_estimated,
+            credit_estimated_rows,
         }),
     }
 }
@@ -479,6 +571,8 @@ pub(super) fn push_account_accum(
     tokens: i64,
     credit: Option<f64>,
     credit_rows: i64,
+    credit_estimated: Option<f64>,
+    credit_estimated_rows: i64,
 ) {
     match list.iter_mut().find(|item| item.account_id == account_id) {
         Some(item) => {
@@ -487,6 +581,8 @@ pub(super) fn push_account_accum(
             item.tokens += tokens;
             add_credit(&mut item.credit, credit);
             item.credit_rows += credit_rows;
+            add_credit(&mut item.credit_estimated, credit_estimated);
+            item.credit_estimated_rows += credit_estimated_rows;
             // 名字只做「快照刷新」：非空才覆盖，绝不清空已有的名字
             // （某些请求拿不到名字而另一些拿到了，取有名字的那一份）
             if !account_name.is_empty() {
@@ -501,6 +597,8 @@ pub(super) fn push_account_accum(
             tokens,
             credit,
             credit_rows,
+            credit_estimated,
+            credit_estimated_rows,
         }),
     }
 }
@@ -565,6 +663,8 @@ pub(super) fn build_providers(totals: &[ProviderAccum]) -> Vec<Value> {
                 // `null` = 这一家没有读数，`0` = 上报了 0
                 "credit": round_credit(item.credit),
                 "creditRows": item.credit_rows,
+                "creditEstimated": round_credit(item.credit_estimated),
+                "creditEstimatedRows": item.credit_estimated_rows,
             })
         })
         .collect()
@@ -617,6 +717,9 @@ pub(super) fn build_models(totals: &[ModelAccum]) -> Vec<Value> {
                 "requests": item.requests,
                 "totalTokens": item.tokens,
                 "credit": round_credit(item.credit),
+                "creditRows": item.credit_rows,
+                "creditEstimated": round_credit(item.credit_estimated),
+                "creditEstimatedRows": item.credit_estimated_rows,
             })
         })
         .collect()
@@ -665,6 +768,8 @@ pub(super) fn build_accounts(totals: &[AccountAccum]) -> Vec<Value> {
                 "totalTokens": item.tokens,
                 "credit": round_credit(item.credit),
                 "creditRows": item.credit_rows,
+                "creditEstimated": round_credit(item.credit_estimated),
+                "creditEstimatedRows": item.credit_estimated_rows,
             })
         })
         .collect()
@@ -778,6 +883,10 @@ pub(super) fn daily_trend(daily: &BTreeMap<String, DailyEntry>, start: &str, end
         // 留断点而不是画到 0），`ppm` 同口径也是 `null`
         let credit = day.and_then(|item| item.credit);
         let credit_rows = day.map(|item| item.credit_rows).unwrap_or(0);
+        // 估算部分与直报分开随行返回：折线的点本身仍是 `credit` 合计，
+        // 悬停据此标注「≈ 含估算」；没有估算的日子给 `null`（与 `credit` 同一三态）
+        let credit_estimated = day.and_then(|item| item.credit_estimated);
+        let credit_estimated_rows = day.map(|item| item.credit_estimated_rows).unwrap_or(0);
         out.push(json!({
             "date": key,
             "tokens": tokens,
@@ -787,6 +896,8 @@ pub(super) fn daily_trend(daily: &BTreeMap<String, DailyEntry>, start: &str, end
             "apiKeys": api_keys,
             "credit": round_credit(credit),
             "creditRows": credit_rows,
+            "creditEstimated": round_credit(credit_estimated),
+            "creditEstimatedRows": credit_estimated_rows,
             "ppm": credit_rate(credit, Some(tokens)),
         }));
         cursor += ChronoDuration::days(1);
@@ -860,7 +971,7 @@ pub(super) fn cache_rates(totals: &[(i64, i64)]) -> Value {
 /// 在这里收一次口，比让每个前端调用点各写一遍 `toFixed` 更可靠。
 ///
 /// `None` 原样返回 —— 「没有读数」不能被归一成一个数。
-fn round_credit(value: Option<f64>) -> Option<f64> {
+pub(super) fn round_credit(value: Option<f64>) -> Option<f64> {
     value
         .filter(|value| value.is_finite())
         .map(|value| (value * 10_000.0).round() / 10_000.0)
@@ -937,6 +1048,8 @@ pub(super) fn credit_summary(
         successful: item.successful,
         credit: item.credit,
         credit_rows: item.credit_rows,
+        credit_estimated: item.credit_estimated,
+        credit_estimated_rows: item.credit_estimated_rows,
         tokens: item.tokens,
     }).collect::<Vec<_>>());
     let accounts = build_credit_groups(&totals.account_totals.iter().map(|item| CreditGroup {
@@ -953,6 +1066,8 @@ pub(super) fn credit_summary(
         successful: item.successful,
         credit: item.credit,
         credit_rows: item.credit_rows,
+        credit_estimated: item.credit_estimated,
+        credit_estimated_rows: item.credit_estimated_rows,
         tokens: item.tokens,
     }).collect::<Vec<_>>());
     let models = build_credit_groups(&totals.model_totals.iter().map(|item| CreditGroup {
@@ -967,31 +1082,25 @@ pub(super) fn credit_summary(
         // 覆盖度在这里退化成「有读数 / 请求数」，与其它两维同口径
         successful: item.requests,
         credit: item.credit,
-        // 模型累计没有单列 credit_rows（它的口径就是「这一天有几条」）：
-        // 有读数就按该组的请求数算，没有就是 0
-        credit_rows: if item.credit.is_some() { item.requests } else { 0 },
+        // 直报条数与估算分开累计（schema v26）：此前用
+        // `if credit.is_some() { requests }` 反推，估算铺开后覆盖率会假性
+        // 变成 100%，而那正是估算误差最该被看见的地方
+        credit_rows: item.credit_rows,
+        credit_estimated: item.credit_estimated,
+        credit_estimated_rows: item.credit_estimated_rows,
         tokens: item.tokens,
     }).collect::<Vec<_>>());
 
-    // ── 混单位的判据 ──────────────────────────────────────────
-    // 只数**有积分读数且身份非空**的提供商：
-    //   - 空 id 那一组是「未知承载者」的余量（旧聚合行没有 provider 维度），
-    //     它不是一个独立的计费单位，把它算进去会让「只有一家在报积分」的用户
-    //     被误判成混单位；
-    //   - 没有读数的家不贡献任何数值，自然也谈不上单位。
-    // 只有一家时合计是可信的；两家以上时合计没有单位意义。
-    let reporting = totals
-        .provider_totals
-        .iter()
-        .filter(|item| item.credit.is_some() && !item.provider.is_empty())
-        .count();
-    let mixed = reporting > 1;
+    let mixed = credit_mixed(&totals.provider_totals);
 
     let forecast = credit_forecast(daily, today);
 
     json!({
         "total": credit,
         "rows": totals.credit_rows,
+        // 估算部分单列：前端给合计加「≈」，覆盖率仍只按 `rows` 算
+        "estimated": round_credit(totals.credit_estimated),
+        "estimatedRows": totals.credit_estimated_rows,
         "requests": totals.requests,
         "successful": totals.successful,
         "coverage": (coverage * 10_000.0).round() / 10_000.0,
@@ -1011,6 +1120,44 @@ pub(super) fn credit_summary(
     })
 }
 
+/// 「合计没有单位意义」的判据（`credits.mixed`）。
+///
+/// ── 三种贡献者，分开数 ──────────────────────────────────────
+///   1. **直报**（`credit_rows > 0`）：上游在响应里给了读数。Cline 的 `cost`
+///      是美元，与积分共用同一列，所以两家直报就可能是两种货币；
+///   2. **纯估算**（`credit_rows == 0 && credit_estimated_rows > 0`）：整家只有
+///      余额差推出来的值。同一账号的估算值是同一种单位（余额本身的单位），
+///      但**跨账号 / 跨家不一定相同** —— 一个账号按积分、另一个按美元时，
+///      两家的估算值同样不能相加；
+///   3. 两者都有（`credit_rows > 0 && credit_estimated_rows > 0`）：这家已经
+///      在 (1) 里数过了，重复计数会让「只有一家」被误判成混单位。
+///
+/// ── 为什么 (1) 与 (2) 交叉也要算混单位 ──────────────────────
+/// 「一家直报 + 一家纯估算」曾经被漏判（只数直报 = 1，`mixed = false`），
+/// 结果是界面给出一个把美元与积分加在一起的「合计」，而只靠估算的那家还
+/// 进不了分家表 —— 用户看到的数既没有单位，也对不上任何一家。
+///
+/// 反过来，**全部靠估算**（(1) 为 0）时不判混单位：估算值来自余额差，同一
+/// 账号内单位一致，直接给合计比拆成一张全 `≈` 的表更有用；跨账号单位不同
+/// 这种情形在数据里看不到单位（快照表只存 `unit`，不把它透到明细），强行
+/// 判混只会让所有用估算的人都看不到合计。
+///
+/// 空 provider 的组（`""`）不参与：那是旧聚合行没有 provider 维度时留下的
+/// 「未知承载者」余量，不是一个独立的计费单位。把它算进去，只会让「只有一家
+/// 在报积分」的用户被误判成混单位。
+pub(super) fn credit_mixed(providers: &[ProviderAccum]) -> bool {
+    let mut direct = 0usize;
+    let mut estimated_only = 0usize;
+    for item in providers.iter().filter(|item| !item.provider.is_empty()) {
+        if item.credit_rows > 0 {
+            direct += 1;
+        } else if item.credit_estimated_rows > 0 {
+            estimated_only += 1;
+        }
+    }
+    direct > 1 || (direct >= 1 && estimated_only >= 1)
+}
+
 /// 积分维度的一行（三个排行共用）。`id` 在模型维度上是模型名 ——
 /// 与 `build_models` 同一取舍（模型名既是身份也是展示名）。
 struct CreditGroup {
@@ -1020,8 +1167,14 @@ struct CreditGroup {
     /// 成功请求数（覆盖度的分母；与 `credit_rows` 同一口径）。
     /// 模型累计没有这一列，直接用 `requests`（模型维度的每一条都是定局行）。
     successful: i64,
+    /// 直报 + 估算的合计（展示的消耗数）
     credit: Option<f64>,
+    /// 其中**上游直报**的条数（覆盖度的分子）
     credit_rows: i64,
+    /// 其中由余额差估算的积分之和（`None` = 这一组没有估算值）
+    credit_estimated: Option<f64>,
+    /// 其中由余额差估算的条数
+    credit_estimated_rows: i64,
     tokens: i64,
 }
 
@@ -1059,6 +1212,8 @@ fn build_credit_groups(groups: &[CreditGroup]) -> Vec<Value> {
                 "success": item.successful,
                 "credit": round_credit(item.credit),
                 "creditRows": item.credit_rows,
+                "creditEstimated": round_credit(item.credit_estimated),
+                "creditEstimatedRows": item.credit_estimated_rows,
                 "tokens": item.tokens,
                 "ppm": credit_rate(item.credit, Some(item.tokens)),
             })
@@ -1106,6 +1261,9 @@ fn credit_forecast(daily: &BTreeMap<String, DailyEntry>, today: NaiveDate) -> Va
             "date": key,
             // `round_credit(None)` 序列化成 `null` —— 折线据此留断点
             "credit": round_credit(credit),
+            // 估算部分随点返回：预测卡据此提示「这一天的读数里含估算」
+            "creditEstimated": round_credit(row.and_then(|item| item.credit_estimated)),
+            "creditEstimatedRows": row.map(|item| item.credit_estimated_rows).unwrap_or(0),
             "tokens": row.map(|item| item.tokens).unwrap_or(0),
             "requests": row.map(|item| item.requests).unwrap_or(0),
         }));
@@ -1198,6 +1356,9 @@ pub(super) fn cache_trend_24h(entries: &[SummaryRow], now: i64) -> Vec<Value> {
             // 查询退化成回表。积分的时间维度由 `dailyTrend`（按天，来自聚合行）
             // 承担，逐小时的积分不是本次要回答的问题。
             None,
+            0,
+            None,
+            0,
         );
     }
 

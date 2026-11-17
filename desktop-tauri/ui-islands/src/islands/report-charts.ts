@@ -18,6 +18,10 @@ export type StatsDay = {
   credit?: number | null
   /** 当天上报了积分的请求条数（`0` = 没有读数） */
   creditRows?: number
+  /** 当天由余额差估算的积分之和（`null` = 没有估算值） */
+  creditEstimated?: number | null
+  /** 当天由余额差估算的请求条数 */
+  creditEstimatedRows?: number
   /** 当天「每百万 token 多少积分」（`null` = 算不出：没有积分或没有用量） */
   ppm?: number | null
 }
@@ -36,6 +40,10 @@ export type StatsGroup = {
   /** 积分消耗（排行按它排序时才用得上；`null` = 这一维没有读数） */
   credit?: number | null
   creditRows?: number
+  /** 这一组里由余额差估算的积分之和 */
+  creditEstimated?: number | null
+  /** 这一组里由余额差估算的请求条数（与 `creditRows` 互斥） */
+  creditEstimatedRows?: number
   /** 每百万 token 多少积分（后端已算好，前端不重复算） */
   ppm?: number | null
 }
@@ -62,8 +70,12 @@ export type CreditForecast = {
 /** `/api/stats/summary` 的 `credits` 键（新增，缺失则整块不渲染） */
 export type StatsCredits = {
   total?: number | null
-  /** 上报了积分的请求条数 */
+  /** 上游直报了积分的请求条数（不含余额差估算） */
   rows?: number
+  /** 由余额差估算出来的积分之和（已含在 `total` 里） */
+  estimated?: number | null
+  /** 由余额差估算的请求条数（与 `rows` 互斥） */
+  estimatedRows?: number
   requests?: number
   successful?: number
   /** 覆盖率 = rows / successful，0–1 */
@@ -181,6 +193,10 @@ export function round1(value: number): number {
 
 /** 积分读数的展示文本：最多两位小数，去掉无意义的尾零。 */
 export function formatCredit(value: unknown): string {
+  // `Number(null)` / `Number(undefined)` 都是数值，会让「没有读数」显示成 `0`
+  // —— 积分口径里 0 是「确实没花」，与「没有读数」是两件事（见后端
+  // `RequestEntry::credit` 的三态说明）。先判空，与 `formatCreditRate` 同一个出口。
+  if (value === null || value === undefined) return '—'
   const number = Number(value)
   if (!Number.isFinite(number)) return '—'
   // 大额积分（几十万）不需要小数位，小额（0.03）需要 —— 按量级选精度
@@ -197,6 +213,9 @@ export function formatCredit(value: unknown): string {
  * `10` 有的写 `9.99`，纵向对不齐。
  */
 export function formatCreditRate(value: unknown): string {
+  // `Number(null)` 是 0：不先判空就会把「算不出单价」画成 `0.00`（一排单价里
+  // 看着像真的免费）。判据与 `formatCredit` 的 `Number.isFinite` 同一个出口。
+  if (value === null || value === undefined) return '—'
   const number = Number(value)
   if (!Number.isFinite(number)) return '—'
   return number >= 100 ? formatInt(Math.round(number)) : number.toFixed(2)
@@ -284,9 +303,17 @@ export type CreditCell = { key: string; label: string; value: string; sub: strin
 export function creditCells(credits: StatsCredits | undefined): CreditCell[] {
   const data = credits || {}
   const coverage = Math.max(0, Math.min(1, Number(data.coverage) || 0))
+  const estimatedRows = Math.max(0, Number(data.estimatedRows) || 0)
+  // 含量里有估算值时，合计加「≈」：用户看到的不是纯上游读数
+  const approx = estimatedRows > 0 ? '≈ ' : ''
+  const estimateNote = estimatedRows > 0
+    ? t('含余额差估算 {n} 条', { n: formatInt(estimatedRows) })
+    : ''
   const coverageText = data.complete
     ? t('全部成功请求都有读数')
     : t('覆盖 {pct} 的成功请求', { pct: `${(coverage * 100).toFixed(0)}%` })
+  // 覆盖率只按直报算；估算条数单独说明，不让它把覆盖度抬到 100%
+  const totalSub = estimateNote ? `${coverageText} · ${estimateNote}` : coverageText
 
   // 混单位时单价同样是**跨单位的商**（分子混着积分与美元，分母是一个合计），
   // 它没有物理意义 —— 与「合计」一起换成下方的分家表，而不是给一个好看的假数。
@@ -303,14 +330,14 @@ export function creditCells(credits: StatsCredits | undefined): CreditCell[] {
       : {
         key: 'total', label: t('积分消耗'),
         // 一个读数都没有时不写 0：那是「没记录」，不是「免费」
-        value: emptyOf(data.total) ? '—' : formatCredit(data.total),
-        sub: coverageText, mono: false,
+        value: emptyOf(data.total) ? '—' : `${approx}${formatCredit(data.total)}`,
+        sub: totalSub, mono: false,
       },
     {
       key: 'ppm', label: t('每百万 Token 积分'),
-      value: data.mixed || emptyOf(data.ppm) ? '—' : formatCreditRate(data.ppm),
+      value: data.mixed || emptyOf(data.ppm) ? '—' : `${approx}${formatCreditRate(data.ppm)}`,
       sub: data.mixed ? mixedNote : t('输入口径 {rate}', {
-        rate: emptyOf(data.ppmInput) ? '—' : formatCreditRate(data.ppmInput),
+        rate: emptyOf(data.ppmInput) ? '—' : `${approx}${formatCreditRate(data.ppmInput)}`,
       }),
       mono: false,
     },
@@ -324,7 +351,7 @@ export function creditCells(credits: StatsCredits | undefined): CreditCell[] {
         if (raw === null || raw === undefined) return '—'
         const rate = Number(raw)
         if (!Number.isFinite(rate)) return '—'
-        return t('{n} 积分', { n: formatCredit(rate * 3) })
+        return `${approx}${t('{n} 积分', { n: formatCredit(rate * 3) })}`
       })(),
       sub: data.mixed ? mixedNote
         : t('按近 {days} 天单价估算', { days: Number(data.forecast?.windowDays) || 7 }),
@@ -364,7 +391,14 @@ export function rankRows(list: StatsGroup[] | undefined, metric: 'tokens' | 'cre
       const amount = credit
         ? (raw === null || raw === undefined ? Number.NaN : Number(raw))
         : Number(item?.totalTokens ?? item?.tokens) || 0
-      return { id: String(item?.id ?? '').trim(), label: String(item?.label ?? '').trim(), amount }
+      // 估算条数随行带上：排行里的合计同样含估算，显示时加「≈」
+      const estimatedRows = Number(item?.creditEstimatedRows) || 0
+      return {
+        id: String(item?.id ?? '').trim(),
+        label: String(item?.label ?? '').trim(),
+        amount,
+        estimatedRows,
+      }
     })
     .filter(item => Number.isFinite(item.amount) && (credit ? item.amount >= 0 : item.amount > 0))
 
@@ -376,7 +410,8 @@ export function rankRows(list: StatsGroup[] | undefined, metric: 'tokens' | 'cre
   // token 口径下请求次数与成功率仍由概览提供；积分口径同理，排行只回答「谁花得多」。
   return [...rows].sort((left, right) => right.amount - left.amount).map((item, index) => {
     const percent = share(item.amount)
-    const text = credit ? formatCredit(item.amount) : formatTokens(item.amount)
+    const approx = credit && item.estimatedRows > 0 ? '≈ ' : ''
+    const text = credit ? `${approx}${formatCredit(item.amount)}` : formatTokens(item.amount)
     const name = item.label || item.id || t('未知')
     const full = item.id ? t('{name}（{id}）', { name, id: item.id }) : name
     return {
@@ -401,11 +436,16 @@ export function rankRows(list: StatsGroup[] | undefined, metric: 'tokens' | 'cre
 /** 排行卡右上角的小标题：本表的合计，单位随 `metric` 走。 */
 export function rankTotalText(list: StatsGroup[], metric: 'tokens' | 'credit' = 'tokens'): string {
   if (metric === 'credit') {
-    const total = list.reduce((sum, item) => {
+    let total = 0
+    let estimated = 0
+    for (const item of list) {
       const value = item?.credit
-      return value === null || value === undefined ? sum : sum + (Number(value) || 0)
-    }, 0)
-    return `${formatCredit(total)} ${t('积分')}`
+      if (value === null || value === undefined) continue
+      total += Number(value) || 0
+      estimated += Number(item?.creditEstimatedRows) || 0
+    }
+    // 这一表的合计含余额差估算时加「≈」，与概览卡同一口径
+    return `${estimated > 0 ? '≈ ' : ''}${formatCredit(total)} ${t('积分')}`
   }
   return `${formatTokens(list.reduce(
     (sum, item) => sum + (Number(item?.totalTokens ?? item?.tokens) || 0), 0))} tokens`

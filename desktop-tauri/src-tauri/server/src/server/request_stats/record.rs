@@ -37,6 +37,12 @@ pub const MAX_RAW_ROWS: usize = 1000;
 pub const DEFAULT_LIMIT: usize = 50;
 pub const MAX_LIMIT: usize = 500;
 
+/// 积分读数来源的两个取值（`requests.credit_source` / `request_daily` 的拆分口径）。
+/// 写成常量而不是散落的字面量：写入侧（`normalize` / 记账点）与聚合侧
+/// （`fold_into_daily`）必须认同一组字符串，拼错一处就会静默改变覆盖率。
+pub const CREDIT_SOURCE_UPSTREAM: &str = "upstream";
+pub const CREDIT_SOURCE_BALANCE: &str = "balance";
+
 /// 一条请求日志。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RequestEntry {
@@ -94,6 +100,16 @@ pub struct RequestEntry {
     /// 与「上报了 0」是两件事 —— 前端对前者显示「—」，对后者显示「0」。
     #[serde(rename = "credit", default)]
     pub credit: Option<f64>,
+    /// 本行积分的**来源**（schema v26）：`upstream` = 上游在响应里直报
+    /// （`usage.credit` / `points_consumed` 等），`balance` = 由账号余额
+    /// 快照差估算并按 token 权重分摊，空串 = 没有读数 / 旧行。
+    ///
+    /// 这一列不参与展示排序，只服务两件事：报表的覆盖度只数 `upstream`
+    /// （估算值把每条请求都填满后，覆盖度会假性变成 100%），以及界面给估算
+    /// 值加「≈」。与 `credit` 同生同灭：`credit` 为 `None` 时这里必须是空串，
+    /// 否则会出现「有来源没有数」的错位（`normalize` 保证这一点）。
+    #[serde(rename = "creditSource", default)]
+    pub credit_source: String,
     /// 实际承载本次请求的 provider id（架构文档 §3.6）。
     ///
     /// ── 为什么是 `String` + 空串而不是 `Option<String>` ─────────
@@ -389,6 +405,10 @@ impl RequestEntry {
         copy.total_tokens = 0;
         copy.cache_read_tokens = 0;
         copy.credit = None;
+        // 来源与读数同生同灭（见 `NewRequestEntry::normalize`）：只清 `credit`
+        // 会留下「有来源没有数」的错位，聚合侧按来源判估算时就会把一条清零
+        // 的失败行算成估算行。
+        copy.credit_source.clear();
         copy
     }
 }
@@ -420,6 +440,10 @@ pub struct NewRequestEntry {
     /// 上游按请求上报的积分消耗（可空：`None` = 没上报，不是 0；见
     /// `RequestEntry::credit`）
     pub credit: Option<f64>,
+    /// 积分读数来源（`upstream` / `balance`；见 `RequestEntry::credit_source`）。
+    /// 记账点只填采集到的事实，余额差估算由 `request_stats::credit_estimate`
+    /// 事后回填，所以这条路径通常是 `upstream` 或空串。
+    pub credit_source: String,
     /// 实际承载本次请求的 provider id（Agent2API 改造 W2b-T3 新增填入，
     /// W4 接上持久化：见 `normalize` 末尾的透传）。
     ///
@@ -469,6 +493,7 @@ impl NewRequestEntry {
             total_tokens: 0,
             cache_read_tokens: 0,
             credit: None,
+            credit_source: String::new(),
             provider: None,
             client_model: String::new(),
             upstream_model: String::new(),
@@ -516,6 +541,14 @@ impl NewRequestEntry {
         } else {
             self.credit.filter(|value| value.is_finite() && *value >= 0.0)
         };
+        // 来源与读数同生同灭（schema v26）：「上游直报」与「余额差估算」在报表
+        // 里必须分得开（覆盖度只数前者），所以 `credit` 为 None 时来源一律清空；
+        // 认不出的字符串按上游直报处理 —— 手改出来的标记不该改变覆盖度口径。
+        let credit_source = match (&credit, self.credit_source.trim()) {
+            (Some(_), CREDIT_SOURCE_BALANCE) => CREDIT_SOURCE_BALANCE.to_string(),
+            (Some(_), _) => CREDIT_SOURCE_UPSTREAM.to_string(),
+            (None, _) => String::new(),
+        };
         // provider 从入参透传到记账条目（W2b 留的丢弃点在此接上）。
         // `None`（转发链没走到选路就失败）与空串（上游返回了空 id）都归一成
         // **空串**：两者在报表语义上都是「未知承载者」，多一种表示只会让
@@ -545,6 +578,7 @@ impl NewRequestEntry {
             total_tokens: token(self.total_tokens),
             cache_read_tokens: token(self.cache_read_tokens),
             credit,
+            credit_source,
             provider,
             // 双名透传（trim 的理由与 provider 相同：空白不该造出一个
             // 「看起来不同的名字」）；空串语义 = 没有点名 / 没有发出去
@@ -720,6 +754,25 @@ pub struct DailyEntry {
     /// 积分读数可不可信」。0 = 没有任何读数，**不是**「都花了 0」。
     #[serde(rename = "creditRows", default)]
     pub credit_rows: i64,
+    /// 当天**由余额差估算**出来的积分之和（`None` = 这天没有估算值）。
+    ///
+    /// 与 `credit` 分开存：`credit` 是「上游直报 + 估算」的总和（报表的
+    /// 消耗数），`credit_rows` 只数**上游直报**的条数（覆盖率的分母口径），
+    /// 这一列则回答「这天的总数里有多少是推算出来的」—— 界面用它给估算
+    /// 部分加「≈」。`None` 与 `Some(0.0)` 的区别同 `credit`：前者一条估算
+    /// 都没有，后者有估算但恰好合计 0。
+    ///
+    /// `#[serde(default)]` 是**必需**的：迁移读的是 v26 之前的旧
+    /// `request-daily.jsonl`，那些行完全没有这个键；缺一个 `i64` 的默认值
+    /// 会让 `serde_json::from_str::<DailyEntry>` 整行失败，被 `legacy` 的
+    /// 坏行分支整条丢掉（不是只丢这一列）。`credit` 是 `Option`，本来就能
+    /// 容忍缺键，两列放在一起时这一点差异很容易漏。
+    #[serde(default)]
+    pub credit_estimated: Option<f64>,
+    /// 当天有估算读数的请求条数（与 `credit_rows` 互斥：一条请求只会是
+    /// 其中一种来源）。
+    #[serde(default)]
+    pub credit_estimated_rows: i64,
     /// 当天的按模型累计（**契约之外的补充字段**）。
     ///
     /// 为什么必须存在：`topModel` 要按区间跨天累计，而报表侧只从明细取近
@@ -770,6 +823,8 @@ impl DailyEntry {
             cache_hit_tokens: 0,
             cache_input_tokens: 0,
             credit: None,
+            credit_estimated: None,
+            credit_estimated_rows: 0,
             credit_rows: 0,
             model_tokens: Vec::new(),
             provider_stats: Vec::new(),
@@ -793,6 +848,20 @@ pub struct ModelAccum {
     /// `None` 与 `Some(0.0)` 的区别同 `DailyEntry::credit`。
     #[serde(default)]
     pub credit: Option<f64>,
+    /// 这一组里**上游直报**的请求条数（schema v26 起；旧行读成 0）。
+    ///
+    /// 为什么模型维度也要单列它：`credit` 自 v26 起是「直报 + 余额差估算」的
+    /// 合计，拿 `credit.is_some()` 反推条数会把估算行也算成直报，覆盖率随
+    /// 估算铺开而假性变成 100%。`0` = 这一组一条直报都没有（可能全是估算，
+    /// 也可能根本没读数）。
+    #[serde(rename = "creditRows", default)]
+    pub credit_rows: i64,
+    /// 这一组里由余额差估算出来的积分之和（schema v26 起；`None` = 没有估算值）。
+    #[serde(default)]
+    pub credit_estimated: Option<f64>,
+    /// 这一组里**由余额差估算**的请求条数。
+    #[serde(rename = "creditEstimatedRows", default)]
+    pub credit_estimated_rows: i64,
 }
 
 /// 单个 provider 在某天的累计（聚合行的组成部分，W4 新增）。
@@ -820,9 +889,15 @@ pub struct ProviderAccum {
     /// 报表侧的 `credits.mixed` 标记就是为这件事存在的。
     #[serde(default)]
     pub credit: Option<f64>,
-    /// 这一家里**上报了积分**的请求条数（`credit` 为 `None` 的行不计）。
+    /// 这一家里**上游直报了积分**的请求条数（估算行不计，见 `credit_estimated_rows`）。
     #[serde(rename = "creditRows", default)]
     pub credit_rows: i64,
+    /// 这一家里由余额差估算出来的积分之和（schema v26 起；`None` = 没有估算值）。
+    #[serde(default)]
+    pub credit_estimated: Option<f64>,
+    /// 这一家里**由余额差估算**的请求条数。
+    #[serde(rename = "creditEstimatedRows", default)]
+    pub credit_estimated_rows: i64,
 }
 
 /// 单个账号在某天的累计（聚合行的组成部分）。
@@ -857,9 +932,15 @@ pub struct AccountAccum {
     /// 跑几天」时与 `account_usage_records.remaining` 对比的那一侧。
     #[serde(default)]
     pub credit: Option<f64>,
-    /// 这个账号里**上报了积分**的请求条数。
+    /// 这个账号里**上游直报了积分**的请求条数（估算行不计）。
     #[serde(rename = "creditRows", default)]
     pub credit_rows: i64,
+    /// 这个账号里由余额差估算出来的积分之和（schema v26 起；`None` = 没有估算值）。
+    #[serde(default)]
+    pub credit_estimated: Option<f64>,
+    /// 这个账号里**由余额差估算**的请求条数。
+    #[serde(rename = "creditEstimatedRows", default)]
+    pub credit_estimated_rows: i64,
 }
 
 /// 明细查询条件（「模型请求日志」页用）——

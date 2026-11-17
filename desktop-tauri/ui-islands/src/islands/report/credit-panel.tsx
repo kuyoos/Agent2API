@@ -1,18 +1,17 @@
 import { Card, CardContent, CardFooter, CardHeader, MetricCard, MetricGrid } from '@ui'
-import { creditCells, formatCredit, formatCreditRate, type StatsSummary } from '../report-charts'
+import { creditCells, formatCredit, formatCreditRate, formatInt, type StatsSummary } from '../report-charts'
 import { t } from '../../i18n'
 import { CreditTrendChart } from './report-recharts'
 
 /**
- * 积分口径的说明。三条都是**会被误读**的地方，逐条写清：
- *  1. 积分不是网关自己记的账，而是上游在响应的 usage 里报上来的读数 ——
- *     所以「没读数」是常态，不是丢数据；
- *  2. 覆盖率的分母是成功请求（失败请求不产生用量，`normalize` 已把它们的
- *     积分与 token 清空）；
- *  3. 个别上游把 `cost`（美元）报在同一个字段里，与积分混在一列。两家以上
+ * 积分口径的说明。四条都是**会被误读**的地方，逐条写清：
+ *  1. 上游直报优先 —— 响应 usage 里有读数就直接用，不改写；
+ *  2. 没直报的请求由网关按「账号余额差 + Token 权重」事后估算，标 `≈`；
+ *  3. 覆盖率只数上游直报（估算铺满后不能把覆盖度抬到 100%）；
+ *  4. 个别上游把 `cost`（美元）报在同一个字段里，与积分混在一列。两家以上
  *     都在报时，合计没有单位意义，因此不展示合计、改为按提供商分别看。
  */
-const TIP_CREDITS = t('积分消耗读的是上游在响应 usage 里上报的数值（积分 / points_* / cost 等别名字段），不是网关自己的估算。并非所有提供商都上报，覆盖率 = 有读数的成功请求 / 成功请求；覆盖率不足 100% 时合计只含已上报的那部分，读数偏低不等于记账出错。失败请求不产生用量，不计入分母。个别提供商的 cost 是美元、与积分共用同一列，多于一家在报读数时合计没有单位意义，会改为按提供商分别列出。')
+const TIP_CREDITS = t('上游在响应 usage 里直报的积分（积分 / points_* / cost 等别名字段）优先采用。多数渠道不返回单条积分，网关用账号余额的相邻两次读数之差，扣除区间内已直报的部分，再按 Token 权重分摊给没有读数的成功请求 —— 这些值标 ≈，是估算而不是上游原值。覆盖率和「有读数条数」只统计上游直报，估算条数单列。余额查询间隔越稀疏、区间内并发请求越多，估算越粗；充值所在的区间、最后一次余额读数之后的请求，以及没有余额快照的历史请求都不会有估算。失败请求不产生用量，不计入分母。个别提供商的 cost 是美元、与积分共用同一列，多于一家在报读数时合计没有单位意义，会改为按提供商分别列出。')
 
 /**
  * 积分消耗面板：三个读数 + 按天折线（可选提供商分家表）。
@@ -72,14 +71,31 @@ export function CreditPanel({ summary }: { summary: StatsSummary | null }) {
               </div>
               {providers.map(item => {
                 const rows = Number(item.creditRows) || 0
+                const estimatedRows = Number(item.creditEstimatedRows) || 0
                 const success = Number(item.success) || 0
                 const cover = success > 0 ? Math.min(1, rows / success) * 100 : 0
+                // `≈` 只加在**真有数**的格子上：`formatCreditRate(null)` 返回 `—`，
+                // 无条件拼前缀会显示成 `≈ —` —— 那个破折号的语义是「算不出」，
+                // 加个约等号反而像「估出来一个大约未知的数」。credit 同理
+                // （虽然上一层的过滤通常已把 null 挡掉，这里不依赖那个不变量）。
+                const creditText = formatCredit(item.credit)
+                const rateText = formatCreditRate(item.ppm)
+                const approxOf = (text: string) => (estimatedRows > 0 && text !== '—' ? '≈ ' : '')
+                // 覆盖率只数直报：整行都靠估算时不给 0%（那会被读成「没查」），
+                // 明确写「估算」说明这一家的数全是推出来的
+                const coverText = rows > 0
+                  ? `${cover.toFixed(0)}%`
+                  : estimatedRows > 0 ? t('估算') : '—'
                 return (
                   <div className='report-credit-table-row' key={item.id || item.label || 'unknown'}>
                     <span className='name' title={item.label || item.id}>{item.label || item.id || t('未知')}</span>
-                    <span className='num'>{formatCredit(item.credit)}</span>
-                    <span className='num'>{formatCreditRate(item.ppm)}</span>
-                    <span className='pct'>{`${cover.toFixed(0)}%`}</span>
+                    <span className='num'>{`${approxOf(creditText)}${creditText}`}</span>
+                    <span className='num'>{`${approxOf(rateText)}${rateText}`}</span>
+                    <span className='pct' title={estimatedRows > 0
+                      ? t('其中 {n} 条按余额差估算', { n: formatInt(estimatedRows) })
+                      : undefined}>
+                      {coverText}
+                    </span>
                   </div>
                 )
               })}
@@ -97,6 +113,7 @@ export function CreditPanel({ summary }: { summary: StatsSummary | null }) {
         </span>
         <div className='spacer' />
         <span>{t('没有积分读数的那天折线断开，不按 0 计')}</span>
+        <span>{t('≈ 为按账号余额差估算的值，覆盖率只统计上游直报')}</span>
       </CardFooter>
     </Card>
   )

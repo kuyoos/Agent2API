@@ -255,6 +255,12 @@ pub struct ServerState {
     /// `bootstrap` 里挪到监听端口成功之后（见 [`Self::start_background_maintenance`]）。
     /// 字段对外只读，供 `/api/session` 告诉界面「历史数据还在整理」。
     startup_maintenance: Arc<AtomicBool>,
+    /// 余额差估算的常驻循环是否已经起过（见 `start_background_maintenance`）。
+    ///
+    /// 与 `startup_maintenance` 分开：后者是「一次性历史整理」的闸门，而估算
+    /// 循环要**每 30 秒重跑**，并且在「待迁移数据尚未导入」时也要先挂上 ——
+    /// 否则用户点完升级后，本次运行再没有机会启动它。
+    credit_estimate_loop: Arc<AtomicBool>,
 }
 
 impl ServerState {
@@ -590,6 +596,7 @@ impl ServerState {
             db,
             upgrade_pending: Arc::new(AtomicBool::new(upgrade_pending)),
             startup_maintenance: Arc::new(AtomicBool::new(false)),
+            credit_estimate_loop: Arc::new(AtomicBool::new(false)),
         };
         logging::log("[Server]", "Agent2API 多提供商本地网关（Rust 进程内服务）启动中…");
         logging::log("[Config]", &format!("API 端口: {}", port));
@@ -889,6 +896,28 @@ impl ServerState {
     /// 与 `bootstrap` 的判据一致：整块跳过。用户点完升级后，`api::upgrade_api`
     /// 会按原顺序补调这几件事（那时 HTTP 早已在跑，慢也不会挡住面板）。
     pub fn start_background_maintenance(&self) {
+        // 估算循环先挂上：它在 `upgrade_pending` 期间只是空转（循环内判），
+        // 用户点完升级不需要重启就能开始算。重复调用由这个 swap 挡掉。
+        if !self.credit_estimate_loop.swap(true, Ordering::SeqCst) {
+            let stats = self.request_stats();
+            let upgrade_pending = self.upgrade_pending.clone();
+            crate::spawn_task(async move {
+                let mut ticker = tokio::time::interval(std::time::Duration::from_secs(30));
+                // 第一次 tick 立即完成：启动整理刚跑过，等一轮再算
+                ticker.tick().await;
+                loop {
+                    ticker.tick().await;
+                    // 待迁移数据还没导入时跳过：旧余额 / 旧请求尚未入库，算出来的
+                    // 估算会在导入后被重算一遍（白写一次，还会把日志刷满）
+                    if upgrade_pending.load(Ordering::Relaxed) {
+                        continue;
+                    }
+                    let stats = stats.clone();
+                    // 估算会扫 `requests`：放进阻塞线程池，别占着 tokio worker
+                    let _ = tokio::task::spawn_blocking(move || stats.settle_credit_estimates()).await;
+                }
+            });
+        }
         if self.upgrade_pending() {
             logging::log(
                 "[Stats]",

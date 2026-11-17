@@ -70,3 +70,27 @@ pub(super) fn trim_requests(conn: &Connection, max: i64) -> rusqlite::Result<usi
         params![overflow],
     )
 }
+
+/// 裁掉比明细保留期更早的**余额快照**。
+///
+/// ── 为什么必须裁 ────────────────────────────────────────────
+/// 估算只能回看「相邻两条快照」组成的区间，而它要用的明细同样受保留期约束：
+/// 早于 `requests_ms` 的快照，其区间内的请求早已被删，留着只会让
+/// `credit_estimate::settle` 每 30 秒把整张表读一遍（`load_snapshots` 是全表
+/// 扫描），却一条也估不出来。不裁的话这张表只增不减 —— 一个账号一天最多
+/// 2880 行，跑一年就是百万行级。
+///
+/// 边界取 `requests_ms`（明细的保留下界）而不是更宽：区间左端点早于它时，
+/// 右端点之前的那些请求已经有明细被裁掉，估算结果本来就会偏小，不如不算。
+///
+/// 多留一天余量，避免「今天零点整写入的快照」在边界上抖动
+/// （`retention_bounds` 的毫秒下界是当天零点，快照落在同一毫秒时不该被误删）。
+pub(super) fn trim_balance_snapshots(
+    conn: &Connection,
+    requests_ms: i64,
+) -> rusqlite::Result<usize> {
+    conn.execute(
+        "DELETE FROM account_balance_snapshots WHERE at < ?1",
+        params![requests_ms - 86_400_000],
+    )
+}

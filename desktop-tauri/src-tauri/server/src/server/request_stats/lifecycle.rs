@@ -35,6 +35,7 @@ pub(super) fn finish_stale(conn: &Connection, cutoff: i64, now: i64) -> rusqlite
         entry.completion_tokens = 0;
         entry.cache_read_tokens = 0;
         entry.credit = None;
+        entry.credit_source = String::new();
         add_to_daily(conn, entry)?;
     }
     Ok(())
@@ -64,6 +65,7 @@ impl RequestStats {
                 entry.completion_tokens = 0;
                 entry.cache_read_tokens = 0;
                 entry.credit = None;
+                entry.credit_source = String::new();
                 add_to_daily(&tx, entry)?;
             }
             daily::delete_daily_before(&tx, &bounds.daily_key)?;

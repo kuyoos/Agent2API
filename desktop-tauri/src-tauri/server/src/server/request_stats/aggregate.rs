@@ -20,7 +20,7 @@ use chrono::{Duration as ChronoDuration, NaiveDate};
 use serde_json::{json, Value};
 
 use super::clock::{date_key, day_of, local_midnight_ms};
-use super::record::{DailyEntry, RequestEntry};
+use super::record::{DailyEntry, RequestEntry, CREDIT_SOURCE_BALANCE};
 use super::report::{
     build_accounts, build_models, build_providers, build_top_model, cache_rates, cache_trend_24h,
     credit_summary, daily_trend, heatmap, model_stat_key, normalize_range, push_account_accum,
@@ -165,7 +165,7 @@ pub(super) fn backfill_credit_days(conn: &mut rusqlite::Connection) -> rusqlite:
 /// `day` 是本地自然日，区间按 `[当天零点, 次日零点)` 取 —— 与 `date_key(day_of(ts))`
 /// 的归档口径同源（都用 `clock` 的本地时区工具），所以「某条明细属于哪一天」
 /// 与「重算时按哪个区间取它」不可能对不上。
-fn rebuild_day(conn: &rusqlite::Connection, day: NaiveDate) -> rusqlite::Result<()> {
+pub(super) fn rebuild_day(conn: &rusqlite::Connection, day: NaiveDate) -> rusqlite::Result<()> {
     let key = date_key(day);
     let start = local_midnight_ms(day);
     // 开区间上界减 1 毫秒，等价于 `[start, next_start)`；用 1ms 而不是直接取
@@ -307,10 +307,22 @@ pub(super) fn fold_into_daily(day: &mut DailyEntry, item: &RequestEntry) {
     // 这里不再做有限性 / 负数过滤：明细侧的 `NewRequestEntry::normalize`
     // 已经挡过一轮（非有限值与负数按「没上报」处理），而 `rebuild_day` /
     // 迁移回填读的是**已归一的库行**。再判一次只会让两条路径多一处可漂移的口径。
-    if let Some(value) = item.credit {
+    // 覆盖度只数**上游直报**：估算值（`balance`）把每条请求都填满后，
+    // `credit_rows / successful` 会假性变成 100%，估算误差再也看不见。
+    // 估算部分另计一列，界面据此给总数加「≈」。
+    let (credit_rows, credit_estimated, credit_estimated_rows) = if let Some(value) = item.credit {
         day.credit = Some(day.credit.unwrap_or(0.0) + value);
-        day.credit_rows += 1;
-    }
+        if item.credit_source == CREDIT_SOURCE_BALANCE {
+            day.credit_estimated = Some(day.credit_estimated.unwrap_or(0.0) + value);
+            day.credit_estimated_rows += 1;
+            (0, Some(value), 1)
+        } else {
+            day.credit_rows += 1;
+            (1, None, 0)
+        }
+    } else {
+        (0, None, 0)
+    };
     // 模型维度用「上游真名」当统计键（见 `model_stat_key`）：映射只是代名，
     // 实际请求的仍是上游那一个模型，报表要按它归组
     push_model_accum(
@@ -319,6 +331,9 @@ pub(super) fn fold_into_daily(day: &mut DailyEntry, item: &RequestEntry) {
         item.total_tokens,
         1,
         item.credit,
+        credit_rows,
+        credit_estimated,
+        credit_estimated_rows,
     );
     // 空 provider 也建组（见 push_provider_accum 的注释）
     push_provider_accum(
@@ -328,7 +343,9 @@ pub(super) fn fold_into_daily(day: &mut DailyEntry, item: &RequestEntry) {
         i64::from(success),
         item.total_tokens,
         item.credit,
-        i64::from(item.credit.is_some()),
+        credit_rows,
+        credit_estimated,
+        credit_estimated_rows,
     );
     push_account_accum(
         &mut day.account_stats,
@@ -338,6 +355,8 @@ pub(super) fn fold_into_daily(day: &mut DailyEntry, item: &RequestEntry) {
         i64::from(success),
         item.total_tokens,
         item.credit,
-        i64::from(item.credit.is_some()),
+        credit_rows,
+        credit_estimated,
+        credit_estimated_rows,
     );
 }

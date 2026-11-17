@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 
 use serde_json::{json, Value};
 
-use super::record::{DailyEntry, ModelAccum, RequestEntry};
+use super::record::{DailyEntry, ModelAccum, RequestEntry, CREDIT_SOURCE_BALANCE};
 use super::source::{ApiKeyAccum, ApiKeyIdentity, ClientAccum, UsageAccum};
-use super::report::{model_breakdown_json, model_stat_key, push_model_accum, safe_rate};
+use super::report::{model_breakdown_json, model_stat_key, push_model_accum, round_credit, safe_rate};
 
 pub(super) fn request_usage(item: &RequestEntry) -> UsageAccum {
     UsageAccum {
@@ -28,7 +28,8 @@ pub(super) fn merge_client(list: &mut Vec<ClientAccum>, client: &str, label: &st
     }
 }
 
-fn merge_key(list: &mut Vec<ApiKeyAccum>, incoming: &ApiKeyAccum) {
+/// 把一份 API Key 累计并进列表（同日多行合并与运行期折算共用）。
+pub(super) fn merge_api_key(list: &mut Vec<ApiKeyAccum>, incoming: &ApiKeyAccum) {
     if let Some(item) = list.iter_mut().find(|item| {
         item.identity.id == incoming.identity.id && item.identity.source == incoming.identity.source
     }) {
@@ -46,6 +47,9 @@ fn merge_key(list: &mut Vec<ApiKeyAccum>, incoming: &ApiKeyAccum) {
                 model.tokens,
                 model.requests,
                 model.credit,
+                model.credit_rows,
+                model.credit_estimated,
+                model.credit_estimated_rows,
             );
         }
     } else {
@@ -57,7 +61,7 @@ pub(super) fn fold_sources(day: &mut DailyEntry, item: &RequestEntry) {
     let usage = request_usage(item);
     let label = item.source.recorded_client_name();
     merge_client(&mut day.client_stats, &item.source.client, label, &usage);
-    merge_key(&mut day.api_key_stats, &ApiKeyAccum {
+    merge_api_key(&mut day.api_key_stats, &ApiKeyAccum {
         identity: item.source.api_key.clone(),
         usage: usage.clone(),
         clients: vec![ClientAccum { client: item.source.client.clone(), label: label.into(), usage }],
@@ -67,6 +71,10 @@ pub(super) fn fold_sources(day: &mut DailyEntry, item: &RequestEntry) {
             // API Key 明细里的模型分解同样带积分（报表要回答「这把 Key 花在
             // 哪个模型上」）；`None` 原样透传，不在这里判空
             credit: item.credit,
+            // 直报 / 估算的条数分开记，与日报三个维度同一口径
+            credit_rows: i64::from(item.credit.is_some() && item.credit_source != CREDIT_SOURCE_BALANCE),
+            credit_estimated: if item.credit_source == CREDIT_SOURCE_BALANCE { item.credit } else { None },
+            credit_estimated_rows: i64::from(item.credit.is_some() && item.credit_source == CREDIT_SOURCE_BALANCE),
         }],
     });
 }
@@ -162,7 +170,7 @@ pub(super) fn day_sources(day: &DailyEntry) -> (Vec<ClientAccum>, Vec<ApiKeyAccu
     merge_client(&mut clients, "", "", &missing);
     let mut keys = day.api_key_stats.clone();
     let missing = remainder(day, keys.iter().map(|item| item.usage.clone()));
-    merge_key(&mut keys, &ApiKeyAccum { usage: missing, ..Default::default() });
+    merge_api_key(&mut keys, &ApiKeyAccum { usage: missing, ..Default::default() });
     (clients, keys)
 }
 
@@ -174,7 +182,7 @@ pub(super) fn source_totals(
     for (_, day) in daily.range(start.to_string()..=end.to_string()) {
         let (day_clients, day_keys) = day_sources(day);
         for client in day_clients { merge_client(&mut clients, &client.client, &client.label, &client.usage); }
-        for key in day_keys { merge_key(&mut keys, &key); }
+        for key in day_keys { merge_api_key(&mut keys, &key); }
     }
     (clients, keys)
 }
@@ -203,6 +211,10 @@ fn model_rows(models: &[ModelAccum]) -> Vec<Value> {
     rows.into_iter().map(|item| json!({
         "model": item.model, "label": if item.model.is_empty() { "未知模型" } else { &item.model },
         "requests": item.requests, "totalTokens": item.tokens,
+        "credit": round_credit(item.credit),
+        "creditRows": item.credit_rows,
+        "creditEstimated": round_credit(item.credit_estimated),
+        "creditEstimatedRows": item.credit_estimated_rows,
     })).collect()
 }
 

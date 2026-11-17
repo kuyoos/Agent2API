@@ -16,6 +16,9 @@ export type RequestEntry = {
   /** 上游按请求上报的积分消耗（后端 `credit`）；null / 缺键 = 这一家没上报，
    *  与 0（确实零消耗）是两件事 —— 前者显示「—」 */
   credit?: number | null
+  /** 积分来源（后端 `creditSource`）：`upstream` = 上游直报，
+   *  `balance` = 按账号余额差估算（展示加「≈」） */
+  creditSource?: string
   attempts?: number; attemptDetails?: unknown[]; sensitiveHits?: unknown[]
   /** 模型测试发起的请求（后端 `is_test`；此前落盘的老行没有这个键） */
   isTest?: boolean
@@ -400,8 +403,10 @@ export function RequestCell({ entry, column, namesHidden }: { entry: RequestEntr
       }
       return (
         <span key={key} className={className}
-          title={t('本次请求消耗 {credit} 积分', { credit: numberText(value) })}>
-          {numberText(value)}
+          title={entry.creditSource === 'balance'
+            ? t('按余额差估算：本次请求消耗 {credit} 积分', { credit: numberText(value) })
+            : t('本次请求消耗 {credit} 积分', { credit: numberText(value) })}>
+          {entry.creditSource === 'balance' ? `≈ ${numberText(value)}` : numberText(value)}
         </span>
       )
     }

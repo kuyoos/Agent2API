@@ -7,11 +7,13 @@ name: build
 # 只推一条 `repository_dispatch`。本 fork 没有那个账号与令牌，照搬的结果是
 # 「提交了什么都不编译、推 tag 也什么都不出」。因此这里改回**本地构建**：
 #
-#   · push / PR：`verify` 只跑 `cargo check`（server crate），几分钟内拦住编译
-#     错误；前端产物的同源校验由 `frontend-artifacts.yml` 单独负责；
+#   · push / PR：`verify` 跑 `cargo check` + `cargo test`（server crate），几分钟
+#     内拦住编译错误与口径回归；前端产物的同源校验由
+#     `frontend-artifacts.yml` 单独负责；
 #   · 推 `v*` tag：三个构建任务全跑，产出 7 份附件并**自动发布**到本仓库的
 #     Release（`kuyoos/Agent2API`）；
-#   · 手动 workflow_dispatch：只构建、不发布，产物留在 Actions 的 artifact 里。
+#   · 手动 workflow_dispatch：先跑一遍 verify，再构建、不发布，产物留在
+#     Actions 的 artifact 里。
 #
 # ── 只出 Windows 桌面端 + 服务端包 ────────────────────────────
 # 本 fork 的实际部署形态只有两种：
@@ -29,7 +31,7 @@ name: build
 # 仓库，标准 runner 免费且不计分钟。
 #
 # ── job 分工 ─────────────────────────────────────────────────
-#   verify          → cargo check（server crate）
+#   verify          → cargo check + cargo test（server crate）
 #   windows         → Windows 桌面端 NSIS exe    → artifact: windows-nsis
 #   linux-server    → Linux 服务端包（无 GUI）   → artifact: linux-server-{amd64,arm64}
 #   windows-server  → Windows 服务端包（无 GUI） → artifact: windows-server-amd64
@@ -49,10 +51,10 @@ name: build
 
 on:
   push:
-    branches: [main]
+    branches: [main, beta]
     tags: ['v*']
   pull_request:
-    branches: [main]
+    branches: [main, beta]
   workflow_dispatch:
 
 permissions:
@@ -67,7 +69,12 @@ jobs:
   # 的 tauri 依赖树要装一整套系统库，留给标签构建时按平台编。
   verify:
     # tag 推上去时下面三个构建任务已经在编同一份代码，不必再查一遍
-    if: github.event_name == 'pull_request' || (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/'))
+    #
+    # 手动触发也跑：验证分支（`codex/**`）不触发 push 事件，而本仓库约定
+    # 「不在本机构建」—— 没有这一步，独立分支上的改动只能靠开 PR 才能拿到
+    # 一次编译检查。多跑一次 check + test 的代价远小于「把没编过的代码当成
+    # 编过了」。
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -84,6 +91,13 @@ jobs:
       - name: 编译检查（server）
         working-directory: desktop-tauri/src-tauri
         run: cargo check --all-targets -p agent2api-server
+
+      # 测试与 check 同源（同一 crate、同一次依赖编译）：积分估算的分摊 /
+      # 清算 / 聚合口径都靠这一组端到端用例兜底，只 check 不看行为等于没验。
+      # 本仓库是公开仓库，runner 不计分钟，多跑这一步没有成本。
+      - name: 单元测试（server）
+        working-directory: desktop-tauri/src-tauri
+        run: cargo test -p agent2api-server
 
   # ── Windows 桌面端 ──────────────────────────────────────────
   windows:

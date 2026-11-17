@@ -28,9 +28,7 @@ pub fn parse(usage: &Value) -> SourceFacts {
             .filter(|source| !source.id.is_empty() && source.id.len() <= 512).collect()
     }).unwrap_or_default();
     let (remaining, unlimited) = crate::server::core::usage_records::extract_remaining(usage);
-    let unit = usage.get("unit").and_then(Value::as_str).unwrap_or_else(|| {
-        if usage.get("totalLeft").is_some() { "积分" } else { "" }
-    }).trim().to_string();
+    let unit = crate::server::core::usage_records::usage_unit(usage);
     SourceFacts { sources, remaining, unlimited, unit }
 }
 
@@ -55,7 +53,7 @@ pub fn rows_for(account: &Value, facts: &Facts) -> Value {
         let unit = record.map(|facts| facts.unit.as_str()).filter(|unit| !unit.is_empty())
             .or_else(|| sources.iter().find(|source| source.id == "account").map(|source| source.unit.as_str()))
             .unwrap_or("");
-        let credit = unit == "积分" || unit.eq_ignore_ascii_case("credits");
+        let credit = crate::server::core::usage_records::is_credit_unit(unit);
         let label = if credit { "总积分" } else { "账号主额度" };
         if let Some(account) = rows.iter_mut().find(|source| source.get("id").and_then(Value::as_str) == Some("account")) {
             if credit { account["label"] = json!(label); }

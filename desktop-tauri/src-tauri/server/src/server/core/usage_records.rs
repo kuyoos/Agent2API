@@ -201,10 +201,10 @@ pub fn write_result(account_id: &str, outcome: &UsageOutcome) {
     }
     let now = logging::now_ms();
     let Some(db) = database() else { return };
-    // 闭包返回 `(是否成功, 成功时提出的数字)`：失败分支只写原因、保留旧数值
+    // 闭包返回 `(是否成功, 成功时提出的数字, 快照写入失败原因)`：失败分支只写原因、保留旧数值
     // （SQL 里就不碰 usage / remaining / last_success 三列），事实表按它更新。
     // `with_mut` 本身再包一层 Option（锁中毒 = None），match 前先 flatten。
-    let written = db.with_mut(|conn| -> Option<(bool, Option<f64>)> {
+    let written = db.with_mut(|conn| -> Option<(bool, Option<f64>, Option<String>)> {
         match outcome.usage.as_ref() {
             Some(usage) => {
                 let (remaining, unlimited) = extract_remaining(usage);
@@ -226,7 +226,15 @@ pub fn write_result(account_id: &str, outcome: &UsageOutcome) {
                     params![account_id, usage_text, remaining, unlimited as i64, now],
                 )
                 .ok()?;
-                Some((true, remaining))
+                // 余额快照（schema v26）：只有判得出数字的**成功**读数才追加。
+                // 写入失败不回滚上面那条成功读数 —— 快照是可选原料，缺一条只
+                // 影响这一段区间的估算，不该把「余额列已经拿到的新事实」丢掉。
+                let snapshot_error = remaining.and_then(|value| {
+                    record_balance_snapshot(conn, account_id, usage, value, now)
+                        .err()
+                        .map(|error| error.to_string())
+                });
+                Some((true, remaining, snapshot_error))
             }
             None => {
                 let error = outcome.error.clone().unwrap_or_else(|| "查询失败".to_string());
@@ -242,25 +250,35 @@ pub fn write_result(account_id: &str, outcome: &UsageOutcome) {
                     params![account_id, error, outcome.code, now],
                 )
                 .ok()?;
-                Some((false, None))
+                Some((false, None, None))
             }
         }
     })
     .flatten();
-    if matches!(written, Some((true, _))) {
+    // 快照失败只记 verbose（锁已释放，可以走日志表）
+    if let Some(Some(error)) = written.as_ref().map(|(_, _, error)| error.as_ref()) {
+        logging::verbose(
+            "[Usage]",
+            &format!("账号 {account_id} 余额快照未写入（不影响余额读数）：{error}"),
+        );
+    }
+    // `written` 不是 `Copy`：用 `matches!` 按值匹配会把它移走，后面的
+    // `match written` 就报「use of moved value」。这里只借用判一次。
+    let succeeded = written.as_ref().is_some_and(|(ok, _, _)| *ok);
+    if succeeded {
         if let Some(usage) = &outcome.usage {
             crate::server::core::account_order::note_usage(account_id, usage);
         }
     }
     match written {
         // 成功且判出了数字 → 刷新事实
-        Some((true, Some(remaining))) => {
+        Some((true, Some(remaining), _)) => {
             if let Ok(mut facts) = facts_slot().lock() {
                 facts.insert(account_id.to_string(), BalanceFact { remaining: Some(remaining) });
             }
         }
         // 成功但判不出 → 摘除旧事实（unlimited / 形状变化后不再被旧数字挡路）
-        Some((true, None)) => {
+        Some((true, None, _)) => {
             if let Ok(mut facts) = facts_slot().lock() {
                 facts.remove(account_id);
             }
@@ -270,12 +288,78 @@ pub fn write_result(account_id: &str, outcome: &UsageOutcome) {
     }
 }
 
+/// 余额读数「没变」的判定阈值。上游返回的是浮点（WorkBuddy 实测 0.03～0.31），
+/// 同一笔余额被两次查询读出来可能差最后一位 —— 1e-9 足以把这种抖动挡在
+/// 快照表之外，又远小于任何一次真实扣费。
+const BALANCE_EPSILON: f64 = 1e-9;
+
+/// 成功读数 → `account_balance_snapshots`（**只追加**，见 `V26_SCHEMA`）。
+///
+/// 只在读数变化时写：每账号的余额查询间隔最短 30 秒，无条件追加会让这张表
+/// 变成一份余额日志（一天 2880 行 / 账号），而估算只需要「发生变化的那几个
+/// 时刻」。三种情况会写行：
+///   - 首次（还没有基线，需要它当区间的左端点）；
+///   - `remaining` 变化超过 [`BALANCE_EPSILON`]（真正的扣费 / 充值）；
+///   - `unit` 或 `provider` 变化（同一账号换了单位或换了家，跨过这条边界
+///     的差值没有可比性，估算必须在这里断开）。
+///
+/// `provider` 从 `accounts` 表读：账号被删时读不到，落空串 —— 与
+/// `RequestEntry.provider` 的「未知承载者」同一口径。
+fn record_balance_snapshot(
+    conn: &rusqlite::Connection,
+    account_id: &str,
+    usage: &Value,
+    remaining: f64,
+    at: i64,
+) -> rusqlite::Result<()> {
+    let unit = usage_unit(usage);
+    let provider: String = conn
+        .query_row(
+            "SELECT provider FROM accounts WHERE id = ?1",
+            [account_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .unwrap_or_default();
+    let previous: Option<(f64, String, String)> = conn
+        .query_row(
+            "SELECT remaining, unit, provider FROM account_balance_snapshots
+             WHERE account_id = ?1
+             ORDER BY at DESC, id DESC LIMIT 1",
+            [account_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    if let Some((previous_remaining, previous_unit, previous_provider)) = previous {
+        let unchanged = (previous_remaining - remaining).abs() <= BALANCE_EPSILON
+            && previous_unit == unit
+            && previous_provider == provider;
+        if unchanged {
+            return Ok(());
+        }
+    }
+    conn.execute(
+        "INSERT INTO account_balance_snapshots (account_id, remaining, unit, at, provider)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![account_id, remaining, unit, at, provider],
+    )?;
+    Ok(())
+}
+
 /// 清掉「账号已被删除」的孤儿行（心跳循环每轮顺手一次，一条 SQL）。
 pub fn prune_orphans() {
     let Some(db) = database() else { return };
     db.with_mut(|conn| {
         conn.execute(
             "DELETE FROM account_usage_records
+             WHERE account_id NOT IN (SELECT id FROM accounts)",
+            [],
+        )
+        .ok();
+        // 余额快照的寿命比账号长（估算要回看历史区间），账号删除后这些行
+        // 永远用不到了 —— 与上一条同一轮清掉
+        conn.execute(
+            "DELETE FROM account_balance_snapshots
              WHERE account_id NOT IN (SELECT id FROM accounts)",
             [],
         )
@@ -306,6 +390,120 @@ pub fn extract_remaining(usage: &Value) -> (Option<f64>, bool) {
         return (available.as_f64().filter(|value| value.is_finite()), false);
     }
     (None, false)
+}
+
+/// 余额读数的**单位**（`积分` / 货币代码 / `%` / 空串）。
+///
+/// 口径与 `core::limiter::sources::parse` 逐字同源（那边原本就地写了一份）：
+///   - 上游显式给了 `unit` 就用它；
+///   - 否则按形状推断：有 `totalLeft` 的读数在 WorkBuddy 体系里就是积分；
+///   - 都判不出 → 空串（**不是**「积分」：没有依据的单位不能拿去相减）。
+///
+/// 为什么单独抽出来：余额快照表要把单位**落盘**（跨单位相减没有意义，
+/// 估算必须跳过），限制器的额度行也要用同一个词判「这是不是积分」。
+/// 两处各写一份推断，迟早会出现「限制器当积分、快照当货币」的错位。
+///
+/// ── 空串等同于「没给」──────────────────────────────────────────
+/// 上游 / 插件把单位写成 `""` 时**必须继续按形状推断**：`totalLeft` 的读数在
+/// WorkBuddy 体系里就是积分，空串不该把这个已知事实一起抹掉。不这么做的现状
+/// 是「`unit: ""` 的账号永远判不成积分 → 余额差估算整段静默跳过」，用户看到
+/// 的只有「未记录」而没有任何解释。显式给了非空单位（货币 / `%` / `quota`）
+/// 仍然原样采信，不做任何改写。
+///
+/// 顶层没有可用单位时，才退到明细行的 `wallets[].unit` / `credits[].unit`，
+/// 且**只在所有非空单位一致时**采信（混单位说明这份读数本身不可比，宁可不猜）。
+/// `totalLeft` 的推断排在明细之前：WorkBuddy 既有形状的 `credits[]` 是积分包，
+/// 但 `totalLeft` 才是那份文档的主读数，先按主读数走不会改变既有行为。
+pub fn usage_unit(usage: &Value) -> String {
+    if let Some(unit) = usage
+        .get("unit")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|unit| !unit.is_empty())
+    {
+        return unit.to_string();
+    }
+    if usage.get("totalLeft").is_some() {
+        return "积分".to_string();
+    }
+    detail_unit(usage, "wallets")
+        .or_else(|| detail_unit(usage, "credits"))
+        .unwrap_or_default()
+}
+
+/// 明细数组里一致的那个单位（空数组 / 缺键 / 混单位 → `None`）。
+fn detail_unit(usage: &Value, key: &str) -> Option<String> {
+    let rows = usage.get(key)?.as_array()?;
+    let mut found: Option<&str> = None;
+    for row in rows {
+        let Some(unit) = row
+            .get("unit")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|unit| !unit.is_empty())
+        else {
+            continue;
+        };
+        match found {
+            None => found = Some(unit),
+            Some(previous) if previous.eq_ignore_ascii_case(unit) => {}
+            // 混单位（例如积分包 + 额度包并排）：差值不可比，不猜
+            Some(_) => return None,
+        }
+    }
+    found.map(str::to_string)
+}
+
+/// 这个单位是不是「积分」（含英文 `credits`，与限制器的判定同源）。
+pub fn is_credit_unit(unit: &str) -> bool {
+    let unit = unit.trim();
+    unit == "积分" || unit.eq_ignore_ascii_case("credits")
+}
+
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn explicit_unit_wins() {
+        assert_eq!(usage_unit(&json!({ "available": 1.0, "unit": " USD " })), "USD");
+        assert_eq!(usage_unit(&json!({ "available": 1.0, "unit": "%" })), "%");
+        // NewAPI 的展示口径不是积分，不能被当成可相减的读数额
+        assert!(!is_credit_unit(&usage_unit(&json!({ "available": 1.0, "unit": "quota" }))));
+    }
+
+    #[test]
+    fn blank_unit_falls_back_to_shape() {
+        // P3 的回归点：`unit: ""` 曾经直接返回空串，使整个账号的估算静默失效
+        assert_eq!(usage_unit(&json!({ "totalLeft": 12.0, "unit": "" })), "积分");
+        assert!(is_credit_unit(&usage_unit(&json!({ "totalLeft": 12.0, "unit": " " }))));
+        // 没有 totalLeft 也没有任何单位依据：仍然是空串，不猜
+        assert_eq!(usage_unit(&json!({ "available": 1.0, "unit": "" })), "");
+    }
+
+    #[test]
+    fn detail_units_are_used_only_when_consistent() {
+        let consistent = json!({
+            "available": 1.0,
+            "wallets": [
+                { "balance": 1.0, "unit": "credits" },
+                { "balance": 2.0, "unit": "Credits" }
+            ]
+        });
+        assert_eq!(usage_unit(&consistent), "credits");
+        assert!(is_credit_unit(&usage_unit(&consistent)));
+        let mixed = json!({
+            "available": 1.0,
+            "wallets": [{ "balance": 1.0, "unit": "积分" }, { "balance": 2.0, "unit": "额度" }]
+        });
+        assert_eq!(usage_unit(&mixed), "");
+        // `credits[]` 是 WorkBuddy 的积分包；顶层没有 unit 时同样能认出来
+        assert_eq!(
+            usage_unit(&json!({ "credits": [{ "remain": 5.0, "unit": "积分" }] })),
+            "积分"
+        );
+    }
 }
 
 // ─── 账号上的查询配置读取（调度与选路共用的判定口径）─────────

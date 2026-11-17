@@ -75,11 +75,12 @@ pub(super) use raw::{
 /// 看不出错，只会静默取错值）。因此后加的列都在最后：
 ///   - `attempt_details` / `sensitive_hits`（schema v2 的 JSON 文本列）；
 ///   - `credit`（schema v23 的积分消耗，可空 REAL）。
+///   - `credit_source`（schema v26 的读数来源：upstream / balance）。
 pub(super) const REQUEST_COLUMNS: &str = "id, ts, model, account_id, account_name, status, duration_ms, \
      first_response_ms, attempts, error, prompt_tokens, completion_tokens, total_tokens, \
      cache_read_tokens, provider, client_model, upstream_model, attempt_details, sensitive_hits, \
      client_reasoning, upstream_reasoning, phase, phase_started_at, is_test, route, client, \
-     api_key_id, api_key_name, api_key_source, credit, client_evidence";
+     api_key_id, api_key_name, api_key_source, credit, client_evidence, credit_source";
 
 /// 报表窄列查询的列顺序 —— **与 `db::schema` 的 `idx_requests_summary` 列序一致**
 /// （索引是 `ts, is_test` 前缀 + 这里的后 5 列），改任一侧都要回来对一眼。
@@ -172,6 +173,11 @@ pub(super) fn decode_request(row: &rusqlite::Row<'_>) -> rusqlite::Result<Reques
         // 末列是 schema v23 加的（积分消耗）；旧行 / 没上报的行是 NULL ——
         // 读成 None，与「上报了 0」分开（前端前者显示「—」）。
         credit: row.get(29)?,
+        // 末列是 schema v26 加的（积分读数来源）；旧行 / 没读数的行是 NULL ——
+        // 读成空串，与「没有来源」同义（前端只对 `balance` 加「≈」）。
+        credit_source: row
+            .get::<_, Option<String>>(31)?
+            .unwrap_or_default(),
     })
 }
 
@@ -851,6 +857,7 @@ pub(super) fn update_running_request(
          client_reasoning = ?20, upstream_reasoning = ?21, phase = '', phase_started_at = NULL, \
          is_test = ?22, route = ?23, client = ?24, \
          api_key_id = ?25, api_key_name = ?26, api_key_source = ?27, credit = ?28, client_evidence = ?29 \
+         , credit_source = ?30 \
          WHERE id = ?1 AND status = 0",
         params![
             entry.id,
@@ -886,6 +893,7 @@ pub(super) fn update_running_request(
             entry.source.api_key.source,
             entry.credit,
             entry.source.evidence_json(),
+            entry.credit_source,
         ],
     )
 }
@@ -912,9 +920,9 @@ pub(super) fn insert_request(conn: &Connection, entry: &RequestEntry) -> rusqlit
          first_response_ms, attempts, error, prompt_tokens, completion_tokens, total_tokens, \
          cache_read_tokens, provider, client_model, upstream_model, attempt_details, \
          sensitive_hits, client_reasoning, upstream_reasoning, is_test, route, client, \
-         api_key_id, api_key_name, api_key_source, credit, client_evidence) \
+         api_key_id, api_key_name, api_key_source, credit, client_evidence, credit_source) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, \
-         ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29)",
+         ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30)",
         params![
             entry.id,
             entry.ts,
@@ -945,6 +953,7 @@ pub(super) fn insert_request(conn: &Connection, entry: &RequestEntry) -> rusqlit
             entry.source.api_key.source,
             entry.credit,
             entry.source.evidence_json(),
+            entry.credit_source,
         ],
     )?;
     Ok(())

@@ -653,6 +653,17 @@ pub fn record_entry(context: &RecordContext, fallback_error: Option<String>) {
     entry.completion_tokens = snapshot.completion_tokens;
     entry.total_tokens = snapshot.total_tokens;
     entry.cache_read_tokens = snapshot.cache_read_tokens;
+    // 积分消耗（明细在 schema v23 就有这一列，聚合 v25 起同步）：与 token 四件套
+    // 同源、同一次快照搬运。此前漏了这一行 —— `entry.credit` 恒为
+    // `NewRequestEntry::new` 里的 None，于是明细永远写 NULL、日报永远累加不到，
+    // 报表的积分维度与请求日志的积分列全部退化成「—」（表示「未上报」）。
+    // 失败清零与非法值过滤在 `normalize` 里做（见 `RequestEntry::credit`），
+    // 这里只负责透传。
+    entry.credit = snapshot.credit;
+    // 来源标记与读数同生同灭：有上游读数才叫 `upstream`，没有就留空串。
+    // 余额差估算（`request_stats::credit_estimate`）是事后回填的另一条路径，
+    // 不在收尾热路径上 —— 它要等下一次余额查询返回后才知道区间差额。
+    entry.credit_source = if entry.credit.is_some() { "upstream".to_string() } else { String::new() };
     // Token 限制器的增量记账（先取快照再 record：entry 的字段已被 move）。
     // 请求收尾立刻把本次消耗加进当前窗口，选路的 Token 跳过判定不必等下一轮
     // 10 秒刷新。account_id 为空 = 没走到任何账号（转发前就失败的路径），
@@ -1308,5 +1319,41 @@ mod tests {
         let error = row["error"].as_str().unwrap_or("");
         assert!(error.contains("未完整下发"), "真中断必须留摘要：{row}");
         assert_eq!(row["promptTokens"], Value::from(0), "失败的行按契约清零：{row}");
+    }
+
+    /// 积分读数必须从遥测槽一路走到**明细**与**日报**。
+    ///
+    /// 这条链上曾经断过一环：`record_entry` 搬了 token 四件套却漏了 `credit`，
+    /// 于是 `entry.credit` 恒为 `NewRequestEntry::new` 里的 `None` —— 明细永远
+    /// 写 NULL，日报的 `credit` / `credit_rows` 永远累加不到，报表的积分维度与
+    /// 请求日志的积分列一起退化成「未上报」。而链路的其余每一段（`extract_usage`
+    /// 的别名表、`request_daily` 的 v25 两列、`credit_summary` 的口径）都是对的，
+    /// 所以只用数据库之外的单测看不出来。
+    ///
+    /// 因此这里用真库 + 真记账：一次上报 0.25 积分的请求，读回来的明细与汇总
+    /// 都必须带着它。**明细与日报分开断言**：只断明细的话，`fold_into_daily`
+    /// 那条支路漏掉积分仍然会绿。
+    #[tokio::test]
+    async fn credit_reaches_the_detail_row_and_the_daily_aggregate() {
+        let (stats, _dir) = temp_stats("credit");
+        let (context, _telemetry) = context_for(stats.clone());
+        // 与 WorkBuddy 的实测形态同源（`usage.credit`），带小数
+        context
+            .telemetry
+            .report_usage(&serde_json::json!({
+                "prompt_tokens": 1200, "completion_tokens": 300, "total_tokens": 1500,
+                "credit": 0.25
+            }));
+        super::record_entry(&context, None);
+
+        let row = only_row(&stats);
+        assert_eq!(row["credit"], Value::from(0.25), "明细必须留下积分读数：{row}");
+
+        // 报表的区间统计只读聚合行（见 `report` 模块头），所以这一支才是
+        // 用户真正看到的那条路
+        let summary = stats.usage_summary("today", None, None);
+        let credits = &summary["credits"];
+        assert_eq!(credits["total"], Value::from(0.25), "日报的积分合计：{summary}");
+        assert_eq!(credits["rows"], Value::from(1), "上报了积分的条数：{summary}");
     }
 }

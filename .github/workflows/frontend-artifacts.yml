@@ -24,6 +24,12 @@ name: frontend-artifacts
 #   1. 改了 `ui-islands/src/**` 却没跑 `npm run build`；
 #   2. 改了 `i18n/i18n-src/**` 却没跑 `build.mjs`；
 #   3. 用了与 lock 文件不同的依赖版本（先 `npm ci` 再构建）。
+#
+# ── 产物回传（2026-11）─────────────────────────────────────────
+# 本仓库约定「不在本机构建」，而 `ui/**` 又必须由源码重建后入库。两者只能
+# 靠 CI 同时满足：这个 job 在**校验之后**把重建结果上传成 `ui-artifacts`，
+# 维护者下载解压、提交回分支即可 —— 产物依然是 CI 编出来的，不是本地编的。
+# 不自动 push 回分支：那会绕过 review，也会与人工改动抢同一个分支。
 
 on:
   push:
@@ -94,9 +100,27 @@ jobs:
           echo "--- 内容差异摘要 ---"
           git --no-pager diff --stat -- desktop-tauri/ui
           echo
-          echo "本地修复方式："
-          echo "  npm --prefix desktop-tauri/ui-islands run build"
-          echo "  npm --prefix desktop-tauri/mobile run build"
-          echo "  node desktop-tauri/i18n/build.mjs"
-          echo "（不要手动编辑 ui/islands/ui.js、ui/islands/login.js、ui/m/** 或 ui/i18n/** —— 它们是产物，重建即可）"
+          echo "修复方式（本仓库不在本机构建）："
+          echo "  下载本次 run 的 ui-artifacts，解压覆盖 desktop-tauri/ui/ 后提交回分支。"
+          echo "  （产物只能由源码重建；不要手动编辑 ui/islands/ui.js、ui/islands/login.js、"
+          echo "   ui/m/** 或 ui/i18n/** —— 它们是产物）"
           exit 1
+
+      # ── 产物回传 ────────────────────────────────────────────────
+      # 本仓库约定「不本机编译」，而入库产物又必须由源码重建。这两条只能靠
+      # CI 同时满足：这里把重建结果上传成 artifact，由维护者下载后提交回分支
+      # （而不是让工作流自己 push —— 自动提交会绕过 review，也会与人工改动
+      # 抢同一个分支）。
+      #
+      # `if: always()`：同源校验失败时正是最需要这批产物的时刻（失败就意味着
+      # 入库产物与源码对不上，下载重建结果即可直接提交修复）。上传不改变
+      # 成败判定 —— 上一步 exit 1 仍然是整个 job 的结论。
+      - name: 上传重建后的前端产物
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ui-artifacts
+          path: desktop-tauri/ui/
+          if-no-files-found: error
+          # 产物体积本来就只有几 MB；保留 7 天够一次 PR 的修复窗口
+          retention-days: 7

@@ -62,6 +62,7 @@
 
 mod backfill;
 mod clock;
+mod credit_estimate;
 // 旧文件导入的入口（只给 `db::migrate` 的迁移项调用，运行期不参与）。
 // `pub(crate)` 而不是私有：迁移项在 `db::migrate` 里，与 `request_stats`
 // 不是父子模块，私有模块它够不到。
@@ -219,6 +220,13 @@ pub struct RequestStats {
     maintenance_writes: AtomicU64,
     /// 上次做保留期裁剪的毫秒时间戳；低流量时用它兜底。
     last_maintenance_ms: AtomicI64,
+    /// 上一轮 settle 记过日志的「非积分单位」集合。
+    ///
+    /// settle 每 30 秒跑一轮，而一个按美元计费 / 按百分比计费的账号会**一直**
+    /// 留着那些快照 —— 逐轮打同一句 verbose 等于把日志刷满。只在集合变化时
+    /// 打一次，既保留「为什么没有估算值」的可查性，又不制造噪音。
+    /// 与 `inner` 同一取向：锁内不做任何写日志的事，只比对与更新这一份小集合。
+    foreign_units_seen: Mutex<std::collections::BTreeSet<String>>,
 }
 
 impl RequestStats {
@@ -258,6 +266,7 @@ impl RequestStats {
             vacuum: Arc::new(VacuumStatus::new()),
             maintenance_writes: AtomicU64::new(0),
             last_maintenance_ms: AtomicI64::new(0),
+            foreign_units_seen: Mutex::new(std::collections::BTreeSet::new()),
         }
     }
 
@@ -781,6 +790,9 @@ impl RequestStats {
             let tx = conn.transaction()?;
             sql::delete_expired_requests(&tx, bounds.requests_ms)?;
             retention::trim_requests(&tx, bounds.request_count)?;
+            // 余额快照与明细同寿命（见 `trim_balance_snapshots` 的说明）：
+            // 只在显式裁剪（启动 / 改保留期）时清，不在每轮记账的热路径上做
+            retention::trim_balance_snapshots(&tx, bounds.requests_ms)?;
             daily::delete_daily_before(&tx, &bounds.daily_key)?;
             tx.commit()
         });
@@ -939,6 +951,80 @@ impl RequestStats {
             ),
             // 标记没写时下次启动自然再试（与上面那条同一处理）
             Some(_) | None => {}
+        }
+    }
+
+    /// 余额差估算的一轮：把「没有上游积分读数」的成功请求按账号余额区间
+    /// 分摊出估算值（见 `credit_estimate` 的模块头）。
+    ///
+    /// ── 调用时机 ──────────────────────────────────────────────
+    /// 常驻循环每 30 秒一次（`server::start_background_maintenance` 之后）。
+    /// 估算依赖**相邻两条余额快照**，所以最后一次查询之后产生的请求要等下一次
+    /// 余额发生变化才会被补上 —— 这是数据本身的节奏，不是这里能缩短的。
+    ///
+    /// ── 为什么锁内只取结果、锁外才打日志 ───────────────────────
+    /// 与 `backfill_credit_once` 同一个死锁约束：持锁期间调 `logging::log`
+    /// 会去写同一把 `Db` 锁（`std::sync::Mutex` 不可重入）。
+    pub fn settle_credit_estimates(&self) {
+        // 明细保留期下界随设置可变，必须**每次**取当前值：估算是常驻循环，
+        // 用构造时的快照会在用户改小保留期后继续给已删明细的区间分摊。
+        let requests_from = self.retention_bounds().requests_ms;
+        let outcome = {
+            let guard = self.guard();
+            self.with_conn_mut(&guard, |conn| credit_estimate::settle(conn, requests_from))
+        };
+        let Some(outcome) = outcome else { return };
+        if outcome.estimated_rows > 0 || outcome.cleared_rows > 0 {
+            logging::log(
+                "[Stats]",
+                &format!(
+                    "≈ 已按余额差估算 {} 条请求的积分、清除 {} 条已失效估算（重算 {} 天聚合）",
+                    outcome.estimated_rows,
+                    outcome.cleared_rows,
+                    outcome.rebuilt_days.len()
+                ),
+            );
+        }
+        // 明细不完整导致跳过的日子：留一条 verbose 就够（每次 settle 都会再评估）
+        if !outcome.skipped_days.is_empty() {
+            logging::verbose(
+                "[Stats]",
+                &format!(
+                    "余额差估算跳过 {} 天（明细不足以重算聚合）：{}",
+                    outcome.skipped_days.len(),
+                    outcome.skipped_days.join("、")
+                ),
+            );
+        }
+        // 单位不是积分（美元 / 百分比 / NewAPI 的 quota）：整段不估算，这属于
+        // 「按设计跳过」。留一条 verbose 让「为什么没有估算值」有据可查 ——
+        // 没有日志时用户只能看到「未记录」，看起来像估算坏了。
+        //
+        // 只在**单位集合变化时**打一次：settle 每 30 秒跑一轮，同一个账号的
+        // 美元读数会一直留在快照里，逐轮打同一句只会把日志刷满。
+        let units_changed = !outcome.foreign_units.is_empty() && {
+            // 锁只覆盖比对与更新这一小段；下面打日志要写库，不能带着这把锁进去
+            match self.foreign_units_seen.lock() {
+                Ok(mut seen) => {
+                    let changed = *seen != outcome.foreign_units;
+                    if changed {
+                        *seen = outcome.foreign_units.clone();
+                    }
+                    changed
+                }
+                // 锁中毒（只在测试 panic 时可能）：宁可多打一次也别静默
+                Err(_) => true,
+            }
+        };
+        if units_changed {
+            logging::verbose(
+                "[Stats]",
+                &format!(
+                    "余额差估算跳过 {} 种非积分单位（不做跨单位相减）：{}",
+                    outcome.foreign_units.len(),
+                    outcome.foreign_units.iter().cloned().collect::<Vec<_>>().join("、")
+                ),
+            );
         }
     }
 }

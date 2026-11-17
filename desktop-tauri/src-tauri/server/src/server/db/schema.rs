@@ -344,7 +344,13 @@ pub fn is_reserved(key: &str) -> bool {
 /// 区间统计只读聚合（理由见 `report` 模块头），于是积分只算得出 24 小时这一档。
 /// 两列的分工（`credit` = 和 / `credit_rows` = 上报条数）与 v23 那条
 /// 「`NULL` 不等于 0」是同一件事，落点从明细挪到了聚合 —— 详见 [`V25_SCHEMA`]。
-pub const SCHEMA_VERSION: i64 = 25;
+///
+/// ── 版本 26：余额快照历史 + 积分来源（[`V26_SCHEMA`]）─────────
+/// 多数渠道不在响应里报积分，v23 的 `credit` 因此对它们恒为 `NULL`。
+/// 这一版存两样东西：`account_balance_snapshots`（每次余额查询成功都留一条
+/// 读数，供「相邻快照的余额差」反推区间消耗）与 `requests.credit_source`
+/// （区分上游直报 / 余额差估算，报表的覆盖度只数前者）。
+pub const SCHEMA_VERSION: i64 = 26;
 
 /// 版本 1 的全部表与索引：改造前所有 JSON / JSONL 文件的对应形态。
 ///
@@ -926,6 +932,50 @@ ALTER TABLE request_daily ADD COLUMN credit REAL;
 ALTER TABLE request_daily ADD COLUMN credit_rows INTEGER NOT NULL DEFAULT 0;
 ";
 
+/// 版本 26：余额快照历史（`account_balance_snapshots`）+ 积分来源列。
+///
+/// ── 为什么需要一张新表 ──────────────────────────────────────
+/// `account_usage_records` 每账号只留**最近一次**读数（UPSERT 覆盖），没有历史
+/// 就永远算不出「这一段时间扣了多少」。余额差是多数渠道唯一能拿到的计费事实，
+/// 所以每次查询成功都往这张表追加一条（只追加，不更新）。
+///
+/// 三列的语义：
+///   - `remaining`：`usage_records::extract_remaining` 的同一个数字（与余额列
+///     同源），没有数字（unlimited / 形状不认）的查询**不写行**；
+///   - `unit`：读数单位（`积分` / 货币代码 / `%`…）。余额差只能在同一单位内
+///     相减，跨单位不做换算 —— 报表据此只汇总「积分」这一档；
+///   - `at`：读数的观测时刻（毫秒）。查询是异步的，「这段时间扣了多少」按
+///     观测时刻切区间，而不是按发起查询的时刻。
+///
+/// 索引 `(account_id, at)` 服务两个读点：取某账号最近一条快照（`DESC LIMIT 1`）
+/// 与按区间取快照序列（`at >= ? AND at < ?`），两者都是这条索引的前缀扫描。
+///
+/// ── `requests.credit_source` ────────────────────────────────
+/// `credit` 这一列从此有两个来源：上游直报（`upstream`）与余额差估算
+/// （`balance`）。估算值必须能被识别：报表的「覆盖率」只能数直报，
+/// 否则所有历史请求都会被算成「有读数」，覆盖度恒定 100%，估算误差再也
+/// 看不见。旧行 / 没读数的行是 NULL（与 `credit` 的 NULL 同义）。
+const V26_SCHEMA: &str = "
+-- ── 账号余额快照历史（只追加）───────────────────────────────
+CREATE TABLE IF NOT EXISTS account_balance_snapshots (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id  TEXT NOT NULL,
+  remaining   REAL NOT NULL,
+  unit        TEXT NOT NULL DEFAULT '',
+  at          INTEGER NOT NULL,
+  provider    TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_balance_snapshots_account_time
+  ON account_balance_snapshots(account_id, at);
+
+-- ── 积分读数来源（upstream = 上游直报，balance = 余额差估算）──
+ALTER TABLE requests ADD COLUMN credit_source TEXT;
+
+-- ── 报表的估算口径（与直报分开，覆盖率只数直报）──────────────
+ALTER TABLE request_daily ADD COLUMN credit_estimated REAL;
+ALTER TABLE request_daily ADD COLUMN credit_estimated_rows INTEGER NOT NULL DEFAULT 0;
+";
+
 /// 把库升到 [`SCHEMA_VERSION`]（幂等：已是最新版时什么都不做）。
 ///
 /// **库版本高于本程序时返回 `Err` 拒绝打开**（v14 起有意反转的一条既有决定，
@@ -1104,6 +1154,8 @@ fn apply_version(
         24 => conn.execute_batch(include_str!("schema_client_identification.sql")),
         // v25：request_daily 补积分聚合两列（报表的积分维度，见 V25_SCHEMA）
         25 => conn.execute_batch(V25_SCHEMA),
+        // v26：余额快照历史 + 积分来源（余额差估算的原料，见 V26_SCHEMA）
+        26 => conn.execute_batch(V26_SCHEMA),
         _ => Ok(()),
     }
 }
